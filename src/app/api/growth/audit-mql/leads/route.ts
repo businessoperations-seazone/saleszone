@@ -106,7 +106,8 @@ async function checkPending(leads: LeadRecord[]): Promise<{ leads: LeadRecord[];
     return false
   })
   if (pending.length === 0) return { leads, changed: false }
-  // Limite de segurança: no máximo 20 leads por chamada para evitar timeout
+  // Mais recentes primeiro + limite de 20 — leads novos não ficam bloqueados por backlog antigo
+  pending.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
   const batch = pending.slice(0, 20)
 
   const slaData = await readData().catch(() => null)

@@ -249,11 +249,16 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
   if (pending.length === 0) return { checked: 0, resolved: 0 }
 
+  // Processa os mais recentes primeiro — garante que leads novos não fiquem bloqueados
+  // atrás de backlog antigo. Limite de 30 por rodada para não estourar timeout.
+  pending.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  const batch = pending.slice(0, 30)
+
   // Carrega SLA uma vez para todos os leads
   const slaData = await readData().catch(() => null)
 
   let resolved = 0
-  for (const lead of pending) {
+  for (const lead of batch) {
     lead.checked_at = new Date().toISOString()
 
     // Verificação SLA ANTES de buscar Pipedrive — lead fora do SLA não deveria
@@ -294,7 +299,7 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
     }
   }
 
-  const pendingMap = new Map(pending.map(l => [l.id, l]))
+  const pendingMap = new Map(batch.map(l => [l.id, l]))
   await writeLeads(key, leads.map(l => pendingMap.get(l.id) || l))
 
   return { checked: pending.length, resolved }
