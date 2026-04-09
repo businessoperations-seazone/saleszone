@@ -619,9 +619,9 @@ export default function AuditMQL() {
             { label: "Leads",         value: total,      color: T.fg,          status: null             as Status | null, desc: "Total de leads recebidos no dia" },
             { label: "OK",            value: ok,         color: T.verde600,    status: "ok"             as Status | null, desc: "No Pipedrive com atendimento MIA" },
             { label: "Aguardando",    value: aguardando, color: T.primary,     status: "aguardando"     as Status | null, desc: "Recém-chegado, aguardando verificação" },
-            { label: "Sem MIA",       value: semMia,     color: T.laranja500,  status: "sem_mia"        as Status | null, desc: "No Pipedrive mas sem link da conversa MIA" },
-            { label: "Sem Pipedrive", value: semPipe,    color: T.destructive, status: "sem_pipedrive"  as Status | null, desc: "Não encontrado no Pipedrive após 2 min" },
-            { label: "Fora SLA",      value: foraSla,    color: "#9333EA",     status: "fora_sla"       as Status | null, desc: "Fora dos critérios SLA configurados" },
+            { label: "Sem MIA",       value: semMia,     color: T.laranja500,  status: "sem_mia"        as Status | null, desc: "É um MQL mas não tem link de conversa na MIA" },
+            { label: "Sem Pipedrive", value: semPipe,    color: T.destructive, status: "sem_pipedrive"  as Status | null, desc: "É um MQL mas não foi encontrado no Pipe" },
+            { label: "Fora SLA",      value: foraSla,    color: "#9333EA",     status: "fora_sla"       as Status | null, desc: "Não é MQL, fora dos critérios de SLA" },
           ].map(c => {
             const active = statusFilter === c.status && c.status !== null
             return (
