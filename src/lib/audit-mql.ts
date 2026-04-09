@@ -18,6 +18,7 @@ export interface LeadRecord {
   checked_at?: string
   notified?: boolean       // evita Slack duplicado
   form_values?: string[]   // todas as respostas do formulário Meta (para verificação SLA)
+  form_fields?: { name: string; value: string }[]  // pares pergunta+resposta (para exibição)
   sla_ok?: boolean         // resultado da verificação SLA (undefined = não verificado)
 }
 

@@ -58,6 +58,14 @@ function datesInRange(start: string, end: string): string[] {
 
 type DateRange = { start: string; end: string }
 
+const FIELD_LABELS: Record<string, string> = {
+  full_name: "Nome", first_name: "Nome", last_name: "Sobrenome",
+  email: "E-mail", phone_number: "Telefone", phone: "Telefone",
+}
+function fieldLabel(name: string) {
+  return FIELD_LABELS[name] || name.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())
+}
+
 const PRESETS: { label: string; range: () => DateRange }[] = [
   { label: "Hoje",            range: () => ({ start: todayKey(),    end: todayKey()    }) },
   { label: "Ontem",           range: () => ({ start: offsetKey(-1), end: offsetKey(-1) }) },
@@ -673,13 +681,51 @@ export default function AuditMQL() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "12px 16px", borderBottom: `1px solid ${T.border}` }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Leads — {fmtRangeLabel(range)}</span>
-            {isToday && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{ width: 7, height: 7, borderRadius: "50%", background: T.verde600,
-                  animation: "pulse 2s infinite" }} />
-                <span style={{ fontSize: 12, color: T.mutedFg }}>ao vivo · 30s</span>
-              </div>
-            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {isToday && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ width: 7, height: 7, borderRadius: "50%", background: T.verde600,
+                    animation: "pulse 2s infinite" }} />
+                  <span style={{ fontSize: 12, color: T.mutedFg }}>ao vivo · 30s</span>
+                </div>
+              )}
+              {visibleLeads.length > 0 && (
+                <button
+                  onClick={() => {
+                    const allFieldNames = Array.from(new Set(
+                      visibleLeads.flatMap(l => (l.form_fields || []).map(f => f.name))
+                    ))
+                    const headers = ["Data", "Horário", "Nome", "E-mail", "Telefone", "Vertical", "Campanha", "Status",
+                      ...allFieldNames.map(fieldLabel)]
+                    const rows = visibleLeads.map(l => {
+                      const fm = Object.fromEntries((l.form_fields || []).map(f => [f.name, f.value]))
+                      const dt = new Date(l.created_at)
+                      return [
+                        dt.toLocaleDateString("pt-BR"),
+                        dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+                        l.name, l.email, l.phone, l.vertical || "", l.campaign_name || "",
+                        STATUS_META[l.status]?.label || l.status,
+                        ...allFieldNames.map(n => fm[n] || ""),
+                      ]
+                    })
+                    const csv = [headers, ...rows]
+                      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(","))
+                      .join("\n")
+                    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement("a")
+                    a.href = url
+                    a.download = `audit-mql-${range.start}${range.start !== range.end ? "_" + range.end : ""}.csv`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12,
+                    color: T.mutedFg, background: "none", border: `1px solid ${T.border}`,
+                    borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                  ↓ CSV
+                </button>
+              )}
+            </div>
           </div>
 
           {loading ? (
@@ -799,22 +845,44 @@ export default function AuditMQL() {
                                 textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>
                                 Respostas do formulário
                               </div>
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                                {annotateSla(lead.form_values!, lead.vertical || "").map(({ val, ok: valOk }, i) => (
-                                  <span key={i} style={{
-                                    fontSize: 12, padding: "3px 10px", borderRadius: 4,
-                                    background: valOk === false ? "#FEF2F2"
-                                              : valOk === true  ? "#F0FDF4"
-                                              : T.muted,
-                                    border: `1px solid ${valOk === false ? T.destructive + "44"
-                                                       : valOk === true  ? T.verde600 + "44"
-                                                       : T.border}`,
-                                    color: valOk === false ? T.destructive
-                                         : valOk === true  ? T.verde600
-                                         : T.fg,
-                                    fontWeight: valOk === false ? 700 : 400,
-                                  }}>{val}</span>
-                                ))}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                {lead.form_fields?.length
+                                  ? (() => {
+                                      const annotations = annotateSla(lead.form_fields.map(f => f.value), lead.vertical || "")
+                                      return lead.form_fields.map((f, i) => {
+                                        const { ok: valOk } = annotations[i]
+                                        return (
+                                          <div key={i} style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                                            <span style={{ fontSize: 11, color: T.mutedFg, minWidth: 120, flexShrink: 0 }}>
+                                              {fieldLabel(f.name)}
+                                            </span>
+                                            <span style={{
+                                              fontSize: 12, padding: "2px 8px", borderRadius: 4,
+                                              background: valOk === false ? "#FEF2F2"
+                                                        : valOk === true  ? "#F0FDF4"
+                                                        : T.muted,
+                                              border: `1px solid ${valOk === false ? T.destructive + "44"
+                                                                 : valOk === true  ? T.verde600 + "44"
+                                                                 : T.border}`,
+                                              color: valOk === false ? T.destructive
+                                                   : valOk === true  ? T.verde600
+                                                   : T.fg,
+                                              fontWeight: valOk === false ? 700 : 400,
+                                            }}>{f.value}</span>
+                                          </div>
+                                        )
+                                      })
+                                    })()
+                                  : annotateSla(lead.form_values!, lead.vertical || "").map(({ val, ok: valOk }, i) => (
+                                      <span key={i} style={{
+                                        fontSize: 12, padding: "2px 8px", borderRadius: 4,
+                                        background: valOk === false ? "#FEF2F2" : valOk === true ? "#F0FDF4" : T.muted,
+                                        border: `1px solid ${valOk === false ? T.destructive + "44" : valOk === true ? T.verde600 + "44" : T.border}`,
+                                        color: valOk === false ? T.destructive : valOk === true ? T.verde600 : T.fg,
+                                        fontWeight: valOk === false ? 700 : 400,
+                                      }}>{val}</span>
+                                    ))
+                                }
                               </div>
                             </div>
                           </td>

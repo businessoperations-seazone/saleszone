@@ -36,7 +36,7 @@ async function getFormsForPage(pageId: string): Promise<{ id: string; name: stri
   return forms
 }
 
-function parseLead(lead: Record<string, unknown>): Partial<LeadRecord> & { form_values: string[] } {
+function parseLead(lead: Record<string, unknown>): Partial<LeadRecord> & { form_values: string[]; form_fields: { name: string; value: string }[] } {
   const fieldData = (lead.field_data as { name: string; values: string[] }[]) || []
   const fields: Record<string, string> = {}
   for (const item of fieldData) {
@@ -46,6 +46,8 @@ function parseLead(lead: Record<string, unknown>): Partial<LeadRecord> & { form_
   const lastName  = fields["last_name"]  || ""
   const fullName  = fields["full_name"]  || `${firstName} ${lastName}`.trim()
 
+  const form_fields = fieldData.flatMap(f => (f.values || []).map(v => ({ name: f.name, value: v })))
+
   return {
     name:        fullName,
     email:       fields["email"] || "",
@@ -53,7 +55,8 @@ function parseLead(lead: Record<string, unknown>): Partial<LeadRecord> & { form_
     form_id:     String(lead.form_id || ""),
     ad_id:       String(lead.ad_id   || ""),
     page_id:     String(lead.page_id || ""),
-    form_values: fieldData.flatMap(f => f.values || []),
+    form_values: form_fields.map(f => f.value),
+    form_fields,
   }
 }
 
@@ -99,8 +102,8 @@ async function recoverDate(targetDate: string) {
   let skipped    = 0
   let errors     = 0
   const recoveredLeads: string[] = []
-  // leadgen_id → form_values a retroalimentar em leads já existentes
-  const toBackfill = new Map<string, string[]>()
+  // leadgen_id → form_values + form_fields a retroalimentar em leads já existentes
+  const toBackfill = new Map<string, { form_values: string[]; form_fields: { name: string; value: string }[] }>()
 
   for (const pageId of PAGE_IDS) {
     let forms: { id: string; name: string }[] = []
@@ -114,9 +117,10 @@ async function recoverDate(targetDate: string) {
         const blobLead = existingMap.get(ml.leadgen_id)
 
         if (blobLead) {
-          // Lead já existe — backfill de form_values se estiver vazio
-          if (!blobLead.form_values?.length && ml.parsed.form_values?.length) {
-            toBackfill.set(ml.leadgen_id, ml.parsed.form_values!)
+          // Lead já existe — backfill se faltar form_values ou form_fields
+          const needsBackfill = (!blobLead.form_values?.length || !blobLead.form_fields?.length) && ml.parsed.form_values?.length
+          if (needsBackfill) {
+            toBackfill.set(ml.leadgen_id, { form_values: ml.parsed.form_values!, form_fields: ml.parsed.form_fields! })
           } else {
             skipped++
           }
@@ -148,6 +152,7 @@ async function recoverDate(targetDate: string) {
           created_at:    ml.created_time || new Date().toISOString(),
           status:        "aguardando",
           form_values:   ml.parsed.form_values,
+          form_fields:   ml.parsed.form_fields,
         }
 
         try {
@@ -168,8 +173,8 @@ async function recoverDate(targetDate: string) {
       const allLeads = await readLeads(targetDate)
       let changed = false
       for (const lead of allLeads) {
-        const vals = toBackfill.get(lead.leadgen_id)
-        if (vals) { lead.form_values = vals; backfilled++; changed = true }
+        const bf = toBackfill.get(lead.leadgen_id)
+        if (bf) { lead.form_values = bf.form_values; lead.form_fields = bf.form_fields; backfilled++; changed = true }
       }
       if (changed) await writeLeads(targetDate, allLeads)
     } catch (err) { console.error("[recovery] backfill write failed:", err) }
