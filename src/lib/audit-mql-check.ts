@@ -95,21 +95,76 @@ function slaVertical(auditVertical: string): string | null {
   return null
 }
 
-function checkSlaRow(row: SlaRow, valSet: Set<string>): boolean {
-  const ok = (accepted: string[]) => accepted.length === 0 || accepted.some(v => valSet.has(v))
-  return ok(row.mql_intencoes) && ok(row.mql_faixas) && ok(row.mql_pagamentos)
+function formsKey(auditVertical: string): string | null {
+  if (auditVertical === "Investimentos") return "SZI"
+  if (auditVertical === "Serviços")      return "Serviços"
+  if (auditVertical === "Marketplace")   return "Marketplace"
+  return null
 }
 
-function checkSla(lead: LeadRecord, slaData: SlaData): boolean {
-  if (!lead.form_values?.length) return true  // sem dados do formulário = não verificar
+// Normaliza texto para comparação (remove acentos, pontuação, espaços)
+function norm(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "")
+}
+
+// Mapeia form_fields do lead às perguntas SLA por índice de pergunta
+// Retorna Map<questionIndex, valor[]> — cada pergunta tem seus próprios valores
+function mapFieldsToQuestions(
+  fields: { name: string; value: string }[],
+  questions: { pergunta: string; opcoes: string[] }[]
+): Map<number, string[]> {
+  const result = new Map<number, string[]>()
+  const standardFields = new Set(["full_name", "first_name", "last_name", "email", "phone_number", "phone"])
+
+  for (const field of fields) {
+    if (standardFields.has(field.name)) continue
+
+    const normName = norm(field.name)
+    // Tenta match por nome do campo ≈ texto da pergunta
+    let idx = questions.findIndex(q => norm(q.pergunta) === normName)
+
+    // Fallback: verifica se o valor pertence às opções de exatamente uma pergunta
+    if (idx === -1) {
+      const candidates = questions
+        .map((q, i) => ({ i, match: q.opcoes.includes(field.value) }))
+        .filter(c => c.match)
+      if (candidates.length === 1) idx = candidates[0].i
+    }
+
+    if (idx >= 0) {
+      const existing = result.get(idx) || []
+      existing.push(field.value)
+      result.set(idx, existing)
+    }
+  }
+  return result
+}
+
+export function checkSla(lead: LeadRecord, slaData: SlaData): boolean {
+  if (!lead.form_fields?.length) return true  // sem dados do formulário = não verificar
   const v = slaVertical(lead.vertical)
   if (!v) return true                          // vertical sem SLA (Hóspedes, etc.) = não verificar
+
+  const fk = formsKey(lead.vertical)
+  if (!fk) return true
+  const questions = slaData.forms[fk]
+  if (!questions?.length) return true
 
   const activeRows = slaData.rows.filter(r => r.vertical === v && r.status)
   if (!activeRows.length) return true          // sem rows ativas = não verificar
 
-  const valSet = new Set(lead.form_values)
-  return activeRows.some(row => checkSlaRow(row, valSet))
+  const valuesByQ = mapFieldsToQuestions(lead.form_fields, questions)
+
+  // SLA categories mapeiam sequencialmente: Q0 → mql_intencoes, Q1 → mql_faixas, Q2 → mql_pagamentos
+  return activeRows.some(row => {
+    const categories = [row.mql_intencoes, row.mql_faixas, row.mql_pagamentos]
+    return categories.every((accepted, qIdx) => {
+      if (accepted.length === 0) return true        // sem restrição
+      const answers = valuesByQ.get(qIdx) || []
+      if (answers.length === 0) return true          // sem resposta para esta pergunta = não falhar
+      return answers.some(a => accepted.includes(a))
+    })
+  })
 }
 
 // ─── runCheck (usado pelo check/route.ts e summary/route.ts) ─────────────────
@@ -135,6 +190,18 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
   let resolved = 0
   for (const lead of pending) {
     lead.checked_at = new Date().toISOString()
+
+    // Verificação SLA ANTES de buscar Pipedrive — lead fora do SLA não deveria
+    // estar no Pipe, então não faz sentido alertar "sem deal" para ele
+    if (slaData) {
+      lead.sla_ok = checkSla(lead, slaData)
+    }
+    if (lead.sla_ok === false) {
+      lead.status = "fora_sla"
+      lead.notified = true
+      continue
+    }
+
     const personId = await findPerson(lead.email, lead.phone)
     if (!personId) {
       lead.status = "sem_pipedrive"
@@ -148,26 +215,15 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
         lead.notified = true
       } else {
         lead.pipedrive_deal_id = deal.deal_id
-
-        // Verificação SLA (quando há dados do formulário e SLA configurado)
-        if (slaData) {
-          lead.sla_ok = checkSla(lead, slaData)
-        }
-
         if (!deal.mia_link) {
           lead.status = "sem_mia"
           await notify(lead, "sem_mia")
           lead.notified = true
         } else {
           lead.mia_link = deal.mia_link
+          lead.status = "ok"
           lead.notified = true
-          // Lead com MIA mas fora do SLA: marca como fora_sla (não conta como resolved)
-          if (lead.sla_ok === false) {
-            lead.status = "fora_sla"
-          } else {
-            lead.status = "ok"
-            resolved++
-          }
+          resolved++
         }
       }
     }

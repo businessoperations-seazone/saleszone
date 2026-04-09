@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { LeadRecord, dateKey, readLeads, writeLeads } from "@/lib/audit-mql"
+import { checkSla } from "@/lib/audit-mql-check"
+import { readData } from "@/lib/sla-mql-blob"
 
 export const maxDuration = 60
 export const dynamic = "force-dynamic"
@@ -105,8 +107,21 @@ async function checkPending(leads: LeadRecord[]): Promise<{ leads: LeadRecord[];
   })
   if (pending.length === 0) return { leads, changed: false }
 
+  const slaData = await readData().catch(() => null)
+
   for (const lead of pending) {
     lead.checked_at = new Date().toISOString()
+
+    // SLA antes do Pipedrive — lead fora do SLA não deveria estar no Pipe
+    if (slaData) {
+      lead.sla_ok = checkSla(lead, slaData)
+    }
+    if (lead.sla_ok === false) {
+      lead.status = "fora_sla"
+      lead.notified = true
+      continue
+    }
+
     const personId = await findPerson(lead.email, lead.phone)
     if (!personId) {
       lead.status = "sem_pipedrive"
