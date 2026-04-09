@@ -55,9 +55,12 @@ export async function POST(req: NextRequest) {
 
   const [r1, r2] = await Promise.all([runCheck(yesterday), runCheck(today)])
 
+  // recheckSla garante que leads já classificados são reavaliados quando o SLA muda
+  const [s1, s2] = await Promise.all([recheckSla(yesterday), recheckSla(today)])
+
   return NextResponse.json({
-    [yesterday]: r1,
-    [today]:     r2,
+    [yesterday]: { ...r1, sla_recheck: s1 },
+    [today]:     { ...r2, sla_recheck: s2 },
     ts: new Date().toISOString(),
   })
 }
