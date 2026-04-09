@@ -256,6 +256,28 @@ export function Header({ mainView, setMainView, onRefresh, loading, syncElapsed,
               >
                 <ClipboardList size={13} /> Audit MQL
               </button>
+              <button
+                onClick={() => { window.location.href = "/growth/sla-mql"; }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  width: "100%",
+                  padding: "8px 12px",
+                  border: "none",
+                  borderRadius: "6px",
+                  backgroundColor: "transparent",
+                  color: T.cinza600,
+                  fontWeight: 400,
+                  fontSize: "13px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget.style.backgroundColor = T.cinza50); }}
+                onMouseLeave={(e) => { (e.currentTarget.style.backgroundColor = "transparent"); }}
+              >
+                <Target size={13} /> SLA de MQL
+              </button>
             </div>
           )}
         </div>

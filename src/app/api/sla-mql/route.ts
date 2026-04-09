@@ -1,18 +1,11 @@
-import { NextResponse } from "next/server"
-import { createSquadSupabaseAdmin } from "@/lib/squad/supabase"
+import { NextRequest, NextResponse } from "next/server"
+import { readData, writeData } from "@/lib/sla-mql-blob"
 
 export const dynamic = "force-dynamic"
 
-const TABLES = [
-  { table: "squad_baserow_empreendimentos", vertical: "SZI" },
-  { table: "mktp_baserow_empreendimentos",  vertical: "Marketplace" },
-  { table: "szs_baserow_empreendimentos",   vertical: "Serviços" },
-] as const
-
 export type SlaRow = {
   id: number
-  vertical: "SZI" | "Marketplace" | "Serviços"
-  table: string
+  vertical: string
   nome: string
   status: boolean
   commercial_squad: string
@@ -23,37 +16,34 @@ export type SlaRow = {
 
 export async function GET() {
   try {
-    const supabase = createSquadSupabaseAdmin()
+    const data = await readData()
+    return NextResponse.json({ rows: data.rows, forms: data.forms })
+  } catch (e) {
+    return NextResponse.json({ error: String(e) }, { status: 500 })
+  }
+}
 
-    const results = await Promise.all(
-      TABLES.map(async ({ table, vertical }) => {
-        const { data, error } = await supabase
-          .from(table)
-          .select("id, nome, status, commercial_squad, mql_intencoes, mql_faixas, mql_pagamentos")
-          .neq("nome", "")
-          .order("id", { ascending: true })
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json() as {
+      vertical: string
+      nome: string
+      commercial_squad?: string
+      mql_intencoes?: string[]
+      mql_faixas?: string[]
+      mql_pagamentos?: string[]
+    }
+    const { vertical, nome, commercial_squad = "", mql_intencoes = [], mql_faixas = [], mql_pagamentos = [] } = body
 
-        if (error) {
-          console.error(`Error fetching ${table}:`, error.message)
-          return []
-        }
+    if (!vertical || !nome?.trim()) {
+      return NextResponse.json({ error: "params inválidos" }, { status: 400 })
+    }
 
-        return (data || []).map(r => ({
-          id:              r.id,
-          vertical,
-          table,
-          nome:            r.nome || "",
-          status:          Boolean(r.status),
-          commercial_squad: r.commercial_squad || "",
-          mql_intencoes:   Array.isArray(r.mql_intencoes)  ? r.mql_intencoes  : [],
-          mql_faixas:      Array.isArray(r.mql_faixas)     ? r.mql_faixas     : [],
-          mql_pagamentos:  Array.isArray(r.mql_pagamentos) ? r.mql_pagamentos : [],
-        })) as SlaRow[]
-      })
-    )
-
-    const rows: SlaRow[] = results.flat()
-    return NextResponse.json({ rows })
+    const data = await readData()
+    const maxId = data.rows.reduce((m, r) => Math.max(m, r.id), 0)
+    const newRow: SlaRow = { id: maxId + 1, vertical, nome: nome.trim(), status: true, commercial_squad, mql_intencoes, mql_faixas, mql_pagamentos }
+    await writeData({ ...data, rows: [...data.rows, newRow] })
+    return NextResponse.json({ ok: true, id: newRow.id })
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 })
   }

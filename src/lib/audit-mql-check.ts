@@ -1,12 +1,13 @@
 import { LeadRecord, readLeads, writeLeads } from "@/lib/audit-mql"
+import { readData, SlaRow, SlaData } from "@/lib/sla-mql-blob"
 
 const PIPEDRIVE_TOKEN  = process.env.PIPEDRIVE_API_TOKEN        || ""
 const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 const SLACK_WEBHOOK    = process.env.SLACK_WEBHOOK_AUDIT_MQL    || ""
 
-const TWO_MINUTES = 2 * 60 * 1000
-const FOUR_HOURS  = 4 * 60 * 60 * 1000
+const FIVE_MINUTES = 5 * 60 * 1000
+const FOUR_HOURS   = 4 * 60 * 60 * 1000
 
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,32 @@ async function notify(lead: LeadRecord, problem: "sem_pipedrive" | "sem_mia") {
   })
 }
 
+// ─── Verificação SLA ──────────────────────────────────────────────────────────
+
+function slaVertical(auditVertical: string): string | null {
+  if (auditVertical === "Investimentos") return "SZI"
+  if (auditVertical === "Serviços")      return "Serviços"
+  if (auditVertical === "Marketplace")   return "Marketplace"
+  return null
+}
+
+function checkSlaRow(row: SlaRow, valSet: Set<string>): boolean {
+  const ok = (accepted: string[]) => accepted.length === 0 || accepted.some(v => valSet.has(v))
+  return ok(row.mql_intencoes) && ok(row.mql_faixas) && ok(row.mql_pagamentos)
+}
+
+function checkSla(lead: LeadRecord, slaData: SlaData): boolean {
+  if (!lead.form_values?.length) return true  // sem dados do formulário = não verificar
+  const v = slaVertical(lead.vertical)
+  if (!v) return true                          // vertical sem SLA (Hóspedes, etc.) = não verificar
+
+  const activeRows = slaData.rows.filter(r => r.vertical === v && r.status)
+  if (!activeRows.length) return true          // sem rows ativas = não verificar
+
+  const valSet = new Set(lead.form_values)
+  return activeRows.some(row => checkSlaRow(row, valSet))
+}
+
 // ─── runCheck (usado pelo check/route.ts e summary/route.ts) ─────────────────
 
 export async function runCheck(key: string): Promise<{ checked: number; resolved: number }> {
@@ -93,12 +120,17 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
   const now = Date.now()
   const pending = leads.filter(l => {
-    if (l.status === "aguardando" && now - new Date(l.created_at).getTime() > TWO_MINUTES) return true
-    if (l.status === "sem_mia" && l.checked_at && now - new Date(l.checked_at).getTime() < FOUR_HOURS) return true
+    // Aguardando: checa após 5 min (webhook já esperou 7min, GH Actions é o fallback)
+    if (l.status === "aguardando" && now - new Date(l.created_at).getTime() > FIVE_MINUTES) return true
+    // Sem MIA: re-checa por até 4h desde a criação (janela fixa — não renova a cada check)
+    if (l.status === "sem_mia" && now - new Date(l.created_at).getTime() < FOUR_HOURS) return true
     return false
   })
 
   if (pending.length === 0) return { checked: 0, resolved: 0 }
+
+  // Carrega SLA uma vez para todos os leads
+  const slaData = await readData().catch(() => null)
 
   let resolved = 0
   for (const lead of pending) {
@@ -116,15 +148,26 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
         lead.notified = true
       } else {
         lead.pipedrive_deal_id = deal.deal_id
+
+        // Verificação SLA (quando há dados do formulário e SLA configurado)
+        if (slaData) {
+          lead.sla_ok = checkSla(lead, slaData)
+        }
+
         if (!deal.mia_link) {
           lead.status = "sem_mia"
           await notify(lead, "sem_mia")
           lead.notified = true
         } else {
-          lead.status   = "ok"
           lead.mia_link = deal.mia_link
           lead.notified = true
-          resolved++
+          // Lead com MIA mas fora do SLA: marca como fora_sla (não conta como resolved)
+          if (lead.sla_ok === false) {
+            lead.status = "fora_sla"
+          } else {
+            lead.status = "ok"
+            resolved++
+          }
         }
       }
     }
