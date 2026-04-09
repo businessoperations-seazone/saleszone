@@ -1,0 +1,31 @@
+name: Recheck SLA retroativo
+
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Datas separadas por vírgula (ex: 2026-04-09,2026-04-08,2026-04-07)"
+        required: false
+        default: "2026-04-09,2026-04-08,2026-04-07"
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Recheck SLA para as datas informadas
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BASE_URL: https://saleszone.vercel.app
+          DATES_INPUT: ${{ github.event.inputs.dates }}
+        run: |
+          # Monta array JSON a partir da string separada por vírgulas
+          DATES_JSON=$(echo "$DATES_INPUT" | tr ',' '\n' | jq -R . | jq -sc .)
+          echo "Datas: $DATES_JSON"
+          STATUS=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "$BASE_URL/api/growth/audit-mql/check" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"recheck_sla\": true, \"dates\": $DATES_JSON}")
+          echo "HTTP $STATUS"
+          cat /tmp/resp.json | jq . 2>/dev/null || cat /tmp/resp.json
+          if [ "$STATUS" != "200" ]; then exit 1; fi
