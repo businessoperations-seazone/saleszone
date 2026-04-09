@@ -172,7 +172,7 @@ async function recoverDate(targetDate: string) {
         if (vals) { lead.form_values = vals; backfilled++; changed = true }
       }
       if (changed) await writeLeads(targetDate, allLeads)
-    } catch { /* não bloqueia o resto */ }
+    } catch (err) { console.error("[recovery] backfill write failed:", err) }
   }
 
   return { date: targetDate, recovered, backfilled, skipped, errors, recoveredLeads, existingBefore: existing.length }
@@ -186,7 +186,7 @@ function yesterdayKey() {
 
 async function recoverAndCheck(targetDate: string) {
   const result = await recoverDate(targetDate)
-  if (result.recovered > 0) await runCheck(targetDate)
+  if (result.recovered > 0 || result.backfilled > 0) await runCheck(targetDate)
   return result
 }
 
