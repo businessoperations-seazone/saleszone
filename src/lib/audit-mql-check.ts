@@ -131,15 +131,18 @@ function mapFieldsToQuestions(
   const result = new Map<number, string[]>()
   const standardFields = new Set(["full_name", "first_name", "last_name", "email", "phone_number", "phone"])
 
-  for (const field of fields) {
-    if (standardFields.has(field.name)) continue
+  const customFields = fields.filter(f => !standardFields.has(f.name))
+  const unmatched: number[] = []  // índices dos campos que não foram atribuídos
 
+  for (let ci = 0; ci < customFields.length; ci++) {
+    const field = customFields[ci]
     const value = canonical(field.value)
     const normName = norm(field.name)
+
     // Tenta match por nome do campo ≈ texto da pergunta
     let idx = questions.findIndex(q => norm(q.pergunta) === normName)
 
-    // Fallback: verifica se o valor (canonicalizado) pertence às opções de exatamente uma pergunta
+    // Fallback 1: valor canônico pertence às opções de exatamente uma pergunta
     if (idx === -1) {
       const candidates = questions
         .map((q, i) => ({ i, match: q.opcoes.includes(value) }))
@@ -151,8 +154,24 @@ function mapFieldsToQuestions(
       const existing = result.get(idx) || []
       existing.push(value)
       result.set(idx, existing)
+    } else {
+      unmatched.push(ci)  // não atribuído — candidato para fallback posicional
     }
   }
+
+  // Fallback 2 (posicional): campos não atribuídos → perguntas ainda sem resposta, em ordem
+  // Pressuposto: Meta envia campos na mesma ordem das perguntas SLA (comportamento padrão)
+  // Resolve valores ambíguos como "Sim"/"Não" que aparecem em múltiplas perguntas
+  if (unmatched.length > 0) {
+    const unanswered = questions.map((_, i) => i).filter(i => !result.has(i))
+    for (let k = 0; k < Math.min(unmatched.length, unanswered.length); k++) {
+      const value = canonical(customFields[unmatched[k]].value)
+      const existing = result.get(unanswered[k]) || []
+      existing.push(value)
+      result.set(unanswered[k], existing)
+    }
+  }
+
   return result
 }
 
