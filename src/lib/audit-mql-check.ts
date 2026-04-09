@@ -62,7 +62,7 @@ async function getLatestDeal(personId: number): Promise<{ deal_id: number; mia_l
 
 async function notify(lead: LeadRecord, problem: "sem_pipedrive" | "sem_mia") {
   if (!SLACK_WEBHOOK || lead.notified) return
-  const time = new Date(lead.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
+  const time = new Date(lead.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })
   const dealLink = lead.pipedrive_deal_id
     ? `<https://seazone-fd92b9.pipedrive.com/deal/${lead.pipedrive_deal_id}|#${lead.pipedrive_deal_id}>`
     : null

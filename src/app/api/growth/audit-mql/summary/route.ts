@@ -58,7 +58,7 @@ async function checkMetaTokenExpiry(): Promise<{ daysLeft: number; expiresAt: st
     const expiresAt: number = data?.data?.expires_at
     if (!expiresAt) return null
     const daysLeft = Math.ceil((expiresAt * 1000 - Date.now()) / (1000 * 60 * 60 * 24))
-    return { daysLeft, expiresAt: new Date(expiresAt * 1000).toLocaleDateString("pt-BR") }
+    return { daysLeft, expiresAt: new Date(expiresAt * 1000).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) }
   } catch {
     return null
   }

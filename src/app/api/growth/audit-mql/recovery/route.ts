@@ -120,8 +120,10 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
   let recovered  = 0
   let backfilled = 0
   let skipped    = 0
+  let errors     = 0
   const recoveredLeads: string[] = []
   const newLeads: LeadRecord[] = []
+  const seenIds = new Set<string>()
   const toBackfill = new Map<string, { form_values: string[]; form_fields: { name: string; value: string }[] }>()
   // Cache de campaign_name por ad_id — evita chamadas duplicadas à Meta API
   const campaignCache = new Map<string, string>()
@@ -151,7 +153,7 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
         }
 
         // Já coletado neste batch — skip
-        if (newLeads.some(l => l.leadgen_id === ml.leadgen_id)) { skipped++; continue }
+        if (seenIds.has(ml.leadgen_id)) { skipped++; continue }
 
         // Campaign com cache por ad_id
         let campaign = ""
@@ -194,6 +196,7 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
         }
 
         newLeads.push(record)
+        seenIds.add(ml.leadgen_id)
         existingMap.set(ml.leadgen_id, record)
         recovered++
         recoveredLeads.push(`${record.name || record.email} (${record.vertical})`)
@@ -202,6 +205,7 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
   }
 
   // Batch write: um único writeLeads com todos os leads existentes + novos
+  // Premissa: execução serial garantida pelo cron (1 invocação por vez)
   if (newLeads.length > 0 || toBackfill.size > 0) {
     const allLeads = newLeads.length > 0 ? [...existing, ...newLeads] : await readLeads(targetDate)
 
@@ -212,10 +216,15 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
       }
     }
 
-    await writeLeads(targetDate, allLeads)
+    try {
+      await writeLeads(targetDate, allLeads)
+    } catch (err) {
+      console.error("[recovery] writeLeads failed:", err)
+      errors++
+    }
   }
 
-  return { date: targetDate, recovered, backfilled, skipped, existingBefore: existing.length, recoveredLeads }
+  return { date: targetDate, recovered, backfilled, skipped, errors, existingBefore: existing.length, recoveredLeads }
 }
 
 function yesterdayKey() {
