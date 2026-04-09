@@ -22,10 +22,23 @@ async function metaFetch(url: string) {
   return res.json()
 }
 
-async function getFormsForPage(pageId: string): Promise<{ id: string; name: string }[]> {
+/** Converte o System User token em Page tokens via /me/accounts */
+async function getPageTokens(): Promise<Map<string, string>> {
+  const map = new Map<string, string>()
+  let url: string | null = `https://graph.facebook.com/v19.0/me/accounts?fields=id,access_token&limit=100&access_token=${META_TOKEN}`
+  while (url) {
+    const data = await metaFetch(url)
+    if (!data?.data) break
+    for (const p of data.data) map.set(String(p.id), String(p.access_token))
+    url = data.paging?.next || null
+  }
+  return map
+}
+
+async function getFormsForPage(pageId: string, pageToken: string): Promise<{ id: string; name: string }[]> {
   const forms: { id: string; name: string }[] = []
   let url = `https://graph.facebook.com/v19.0/${pageId}/leadgen_forms` +
-    `?fields=id,name,status&limit=100&access_token=${META_TOKEN}`
+    `?fields=id,name,status&limit=100&access_token=${pageToken}`
 
   while (url) {
     const data = await metaFetch(url)
@@ -65,13 +78,14 @@ function parseLead(lead: Record<string, unknown>): Partial<LeadRecord> & { form_
 async function getLeadsForForm(
   formId: string,
   minTs: number,
-  maxTs: number
+  maxTs: number,
+  pageToken: string
 ): Promise<{ leadgen_id: string; created_time: string; parsed: Partial<LeadRecord> }[]> {
   const results: { leadgen_id: string; created_time: string; parsed: Partial<LeadRecord> }[] = []
   let url = `https://graph.facebook.com/v19.0/${formId}/leads` +
     `?fields=id,created_time,field_data,ad_id,form_id,page_id` +
     `&time_range%5Bmin%5D=${minTs}&time_range%5Bmax%5D=${maxTs}` +
-    `&limit=100&access_token=${META_TOKEN}`
+    `&limit=100&access_token=${pageToken}`
 
   while (url) {
     const data = await metaFetch(url)
@@ -90,7 +104,7 @@ async function getLeadsForForm(
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
-async function recoverDate(targetDate: string) {
+async function recoverDate(targetDate: string, pageTokens: Map<string, string>) {
   const minDate = new Date(`${targetDate}T03:00:00Z`)
   const maxDate = new Date(minDate.getTime() + 24 * 60 * 60 * 1000 - 1)
   const minUnix = Math.floor(minDate.getTime() / 1000)
@@ -108,12 +122,15 @@ async function recoverDate(targetDate: string) {
   const toBackfill = new Map<string, { form_values: string[]; form_fields: { name: string; value: string }[] }>()
 
   for (const pageId of PAGE_IDS) {
+    const pageToken = pageTokens.get(pageId)
+    if (!pageToken) continue
+
     let forms: { id: string; name: string }[] = []
-    try { forms = await getFormsForPage(pageId) } catch { continue }
+    try { forms = await getFormsForPage(pageId, pageToken) } catch { continue }
 
     for (const form of forms) {
       let metaLeads: Awaited<ReturnType<typeof getLeadsForForm>> = []
-      try { metaLeads = await getLeadsForForm(form.id, minUnix, maxUnix) } catch { continue }
+      try { metaLeads = await getLeadsForForm(form.id, minUnix, maxUnix, pageToken) } catch { continue }
 
       for (const ml of metaLeads) {
         const blobLead = existingMap.get(ml.leadgen_id)
@@ -191,13 +208,13 @@ function yesterdayKey() {
   return d.toISOString().slice(0, 10)
 }
 
-async function recoverAndCheck(targetDate: string) {
-  const result = await recoverDate(targetDate)
+async function recoverAndCheck(targetDate: string, pageTokens: Map<string, string>) {
+  const result = await recoverDate(targetDate, pageTokens)
   if (result.recovered > 0 || result.backfilled > 0) await runCheck(targetDate)
   return result
 }
 
-// GET — cron automático a cada 30min (Vercel envia CRON_SECRET como Bearer)
+// GET — cron automático a cada 10min (Vercel envia CRON_SECRET como Bearer)
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET
@@ -205,7 +222,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const [r1, r2] = await Promise.all([recoverAndCheck(yesterdayKey()), recoverAndCheck(dateKey())])
+  const pageTokens = await getPageTokens()
+  const [r1, r2] = await Promise.all([recoverAndCheck(yesterdayKey(), pageTokens), recoverAndCheck(dateKey(), pageTokens)])
   return NextResponse.json({ yesterday: r1, today: r2 })
 }
 
@@ -216,13 +234,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  const pageTokens = await getPageTokens()
   const body = await req.json().catch(() => ({}))
   const targetDate = body.date || null
 
   if (targetDate) {
-    return NextResponse.json(await recoverAndCheck(targetDate))
+    return NextResponse.json(await recoverAndCheck(targetDate, pageTokens))
   }
 
-  const [r1, r2] = await Promise.all([recoverAndCheck(yesterdayKey()), recoverAndCheck(dateKey())])
+  const [r1, r2] = await Promise.all([recoverAndCheck(yesterdayKey(), pageTokens), recoverAndCheck(dateKey(), pageTokens)])
   return NextResponse.json({ yesterday: r1, today: r2 })
 }
