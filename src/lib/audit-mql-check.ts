@@ -377,8 +377,9 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
   const pendingMap = new Map(batch.map(l => [l.id, l]))
   const updatedLeads = leads.map(l => pendingMap.get(l.id) || l)
 
-  // Enriquece Baserow em lote para todos os leads sem in_baserow definido
-  await enrichBaserow(updatedLeads)
+  // Enriquece Baserow só para a data de hoje — não toca em histórico
+  const today = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  if (key === today) await enrichBaserow(updatedLeads)
 
   await writeLeads(key, updatedLeads)
 

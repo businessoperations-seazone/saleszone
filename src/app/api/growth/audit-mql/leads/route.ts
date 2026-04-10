@@ -165,7 +165,8 @@ export async function GET(req: NextRequest) {
   let leads = await readLeads(date)
 
   const { leads: updated, changed } = await checkPending(leads)
-  const baserowChanged = await enrichBaserow(updated)
+  const isToday = date === dateKey()
+  const baserowChanged = isToday ? await enrichBaserow(updated) : false
   if (changed || baserowChanged) {
     await writeLeads(date, updated)
   }
