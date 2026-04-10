@@ -81,10 +81,11 @@ export async function POST(req: NextRequest) {
     }
     const date = rawDate
     const dry  = body.dry === true
+    const emails: string[] | undefined = body.emails   // opcional: filtra por email
     const leads = await readLeads(date)
     const affected: { id: string; name: string; email: string; vertical: string }[] = []
     for (const l of leads) {
-      if (l.status === "sem_pipedrive") {
+      if (l.status === "sem_pipedrive" && (!emails || emails.includes(l.email))) {
         affected.push({ id: l.id, name: l.name, email: l.email, vertical: l.vertical })
         if (!dry) {
           l.status   = "fora_sla"
