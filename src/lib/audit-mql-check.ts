@@ -304,7 +304,6 @@ async function getBaserowToken(): Promise<string | null> {
 export async function enrichBaserow(leads: LeadRecord[]): Promise<boolean> {
   const now = Date.now()
   const TWO_MIN = 2 * 60 * 1000
-  const THIRTY_MIN = 30 * 60 * 1000
   const toCheck = leads.filter(l => {
     if (l.status === "descartado") return false
     if (l.created_at < BASEROW_START) return false
@@ -312,7 +311,8 @@ export async function enrichBaserow(leads: LeadRecord[]): Promise<boolean> {
     const age = now - new Date(l.created_at).getTime()
     if (age < TWO_MIN) return false
     if (l.in_baserow === undefined) return true
-    if (l.in_baserow === false && age < THIRTY_MIN) return true
+    // Rechecka false durante o dia todo — BASEROW_START já limita ao dia de hoje
+    if (l.in_baserow === false) return true
     return false
   })
   if (!toCheck.length) return false
