@@ -75,21 +75,27 @@ export async function POST(req: NextRequest) {
   // Útil para corrigir leads que foram erroneamente reclassificados pelo recheckSla
   // Adicionar { dry: true } para preview sem gravar
   if (body.force_fora_sla) {
-    const date: string = body.date || today
+    const rawDate: string = body.date || today
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+      return NextResponse.json({ error: "date must be YYYY-MM-DD" }, { status: 400 })
+    }
+    const date = rawDate
+    const dry  = body.dry === true
     const leads = await readLeads(date)
     const affected: { id: string; name: string; email: string; vertical: string }[] = []
     for (const l of leads) {
       if (l.status === "sem_pipedrive") {
         affected.push({ id: l.id, name: l.name, email: l.email, vertical: l.vertical })
-        if (!body.dry) {
+        if (!dry) {
           l.status   = "fora_sla"
           l.sla_ok   = false
           l.notified = true
         }
       }
     }
-    if (!body.dry && affected.length > 0) await writeLeads(date, leads)
-    return NextResponse.json({ force_fora_sla: { date, affected, total: affected.length }, dry: body.dry === true, ts: new Date().toISOString() })
+    if (!dry && affected.length > 0) await writeLeads(date, leads)
+    console.log(`[force_fora_sla] date=${date} dry=${dry} affected=${affected.length}`, affected.map(a => a.email))
+    return NextResponse.json({ force_fora_sla: { date, affected, total: affected.length }, dry, ts: new Date().toISOString() })
   }
 
   // POST com { recheck_sla: true } re-avalia SLA de todos os leads retroativamente
