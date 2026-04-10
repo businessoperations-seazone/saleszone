@@ -285,11 +285,16 @@ export function checkSla(lead: LeadRecord, slaData: SlaData): boolean {
 const BASEROW_START = "2026-04-10T12:00:00.000Z" // 09:00 BRT de 10/04/2026
 
 export async function enrichBaserow(leads: LeadRecord[]): Promise<boolean> {
-  const toCheck = leads.filter(l =>
-    l.status !== "descartado" &&
-    l.in_baserow === undefined &&
-    l.created_at >= BASEROW_START
-  )
+  const now = Date.now()
+  const THIRTY_MIN = 30 * 60 * 1000
+  const toCheck = leads.filter(l => {
+    if (l.status === "descartado" || l.status === "aguardando") return false
+    if (l.created_at < BASEROW_START) return false
+    if (l.in_baserow === undefined) return true
+    // Rechecka false dentro de 30min — Supabase pode ter delay de sync
+    if (l.in_baserow === false && now - new Date(l.created_at).getTime() < THIRTY_MIN) return true
+    return false
+  })
   if (!toCheck.length) return false
 
   const ids = toCheck.map(l => l.leadgen_id).filter(Boolean)
