@@ -1,0 +1,628 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+};
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+function csvResponse(content: string, filename = "export.csv") {
+  return new Response(content, {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename=${filename}`,
+    },
+  });
+}
+
+function getSupabase() {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+}
+
+async function requireAdmin(req: Request): Promise<Record<string, unknown>> {
+  const auth = req.headers.get("Authorization") || "";
+  if (!auth.startsWith("Bearer ")) throw new Error("Unauthorized");
+  const token = auth.slice(7);
+
+  const anonClient = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!
+  );
+  const { data: { user }, error } = await anonClient.auth.getUser(token);
+  if (error || !user?.email?.endsWith("@seazone.com.br")) throw new Error("Forbidden");
+  return user as Record<string, unknown>;
+}
+
+async function validateToken(supabase: ReturnType<typeof getSupabase>, sessionId: string, token: string) {
+  const { data } = await supabase
+    .from("webinar_registrations")
+    .select("*")
+    .eq("session_id", sessionId)
+    .eq("access_token", token)
+    .is("cancelled_at", null)
+    .maybeSingle();
+  return data;
+}
+
+// ── Closers ───────────────────────────────────────────────────────────────────
+
+async function handleClosers(method: string, segments: string[], _req: Request) {
+  const supabase = getSupabase();
+  const slug = segments[0];
+
+  if (method === "GET" && !slug) {
+    const { data } = await supabase
+      .from("webinar_closers")
+      .select("*")
+      .eq("is_active", true)
+      .order("name");
+    return json(data || []);
+  }
+
+  if (method === "GET" && slug) {
+    const { data } = await supabase
+      .from("webinar_closers")
+      .select("*")
+      .eq("slug", slug)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (!data) return json({ error: "Closer not found" }, 404);
+    return json(data);
+  }
+
+  return json({ error: "Method not allowed" }, 405);
+}
+
+// ── Slots ─────────────────────────────────────────────────────────────────────
+
+const SLOT_REQUIRED = ["day_of_week", "time", "duration_minutes", "max_participants", "presenter_email"];
+
+function validateSlotData(data: Record<string, unknown>, requireAll: boolean): string | null {
+  if (requireAll) {
+    const missing = SLOT_REQUIRED.filter(f => !(f in data));
+    if (missing.length) return `Campos obrigatórios ausentes: ${missing.join(", ")}`;
+  }
+  if ("presenter_email" in data) {
+    const email = data.presenter_email;
+    if (typeof email !== "string" || !email.endsWith("@seazone.com.br"))
+      return "presenter_email deve ser @seazone.com.br";
+  }
+  if ("day_of_week" in data) {
+    const dow = data.day_of_week;
+    if (typeof dow !== "number" || dow < 0 || dow > 6)
+      return "day_of_week deve ser um inteiro entre 0 e 6";
+  }
+  return null;
+}
+
+async function cascadeDeactivateSlot(supabase: ReturnType<typeof getSupabase>, slotId: string) {
+  const today = new Date().toISOString().split("T")[0];
+  const { data: sessions } = await supabase
+    .from("webinar_sessions")
+    .select("id")
+    .eq("slot_id", slotId)
+    .eq("status", "scheduled")
+    .gte("date", today);
+
+  for (const session of sessions || []) {
+    const { count } = await supabase
+      .from("webinar_registrations")
+      .select("*", { count: "exact", head: true })
+      .eq("session_id", session.id);
+
+    if ((count ?? 0) > 0) {
+      await supabase.from("webinar_sessions").update({
+        status: "cancelled",
+        cancelled_at: new Date().toISOString(),
+        cancel_reason: "Slot desativado",
+      }).eq("id", session.id);
+    } else {
+      await supabase.from("webinar_sessions").delete().eq("id", session.id);
+    }
+  }
+}
+
+async function handleSlots(method: string, segments: string[], req: Request) {
+  const supabase = getSupabase();
+  const slotId = segments[0];
+
+  if (method === "GET") {
+    const url = new URL(req.url);
+    const closerId = url.searchParams.get("closer_id");
+    let q = supabase.from("webinar_slots").select("*").order("day_of_week").order("time");
+    if (closerId) q = q.eq("closer_id", closerId);
+    const { data } = await q;
+    return json(data || []);
+  }
+
+  if (method === "POST") {
+    await requireAdmin(req);
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (!data.closer_id) return json({ error: "Campo obrigatório ausente: closer_id" }, 400);
+    const err = validateSlotData(data, true);
+    if (err) return json({ error: err }, 400);
+    const { data: created, error } = await supabase.from("webinar_slots").insert(data).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(created, 201);
+  }
+
+  if (method === "PUT" && slotId) {
+    await requireAdmin(req);
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const err = validateSlotData(data, false);
+    if (err) return json({ error: err }, 400);
+    if (data.is_active === false) await cascadeDeactivateSlot(supabase, slotId);
+    const { data: updated, error } = await supabase.from("webinar_slots").update(data).eq("id", slotId).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(updated);
+  }
+
+  if (method === "DELETE" && slotId) {
+    await requireAdmin(req);
+    await supabase.from("webinar_slots").delete().eq("id", slotId);
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  return json({ error: "Method not allowed" }, 405);
+}
+
+// ── Sessions ──────────────────────────────────────────────────────────────────
+
+const VALID_STATUSES = new Set(["scheduled", "live", "ended", "cancelled"]);
+
+async function handleSessions(method: string, segments: string[], req: Request) {
+  const supabase = getSupabase();
+  const url = new URL(req.url);
+
+  // GET /sessions/available
+  if (method === "GET" && segments[0] === "available") {
+    const date = url.searchParams.get("date");
+    if (!date) return json({ error: "Parâmetro 'date' obrigatório" }, 400);
+    const closerSlug = url.searchParams.get("closer_slug");
+
+    let closerId: string | null = null;
+    if (closerSlug) {
+      const { data: closer } = await supabase
+        .from("webinar_closers")
+        .select("id")
+        .eq("slug", closerSlug)
+        .eq("is_active", true)
+        .maybeSingle();
+      if (!closer) return json({ error: "Closer não encontrado" }, 404);
+      closerId = closer.id;
+    }
+
+    let q = supabase.from("webinar_sessions").select("*").eq("date", date).eq("status", "scheduled").order("starts_at");
+    if (closerId) q = q.eq("closer_id", closerId);
+    const { data: sessions } = await q;
+
+    // Batch-fetch slots
+    const slotIds = [...new Set((sessions || []).map((s: Record<string, unknown>) => s.slot_id as string).filter(Boolean))];
+    const slotsMap: Record<string, Record<string, unknown>> = {};
+    if (slotIds.length) {
+      const { data: slots } = await supabase.from("webinar_slots").select("*").in("id", slotIds);
+      for (const sl of slots || []) slotsMap[sl.id as string] = sl;
+    }
+
+    const result = (sessions || []).map((session: Record<string, unknown>) => {
+      const slot = slotsMap[session.slot_id as string] || {};
+      const maxParticipants = (slot.max_participants ?? session.max_participants ?? 0) as number;
+      const registrationsCount = (session.registrations_count ?? 0) as number;
+      const remaining = Math.max(0, maxParticipants - registrationsCount);
+      return remaining > 0 ? { ...session, remaining_capacity: remaining } : null;
+    }).filter(Boolean);
+
+    return json(result);
+  }
+
+  // PATCH /sessions/:id/status
+  if (method === "PATCH" && segments[1] === "status") {
+    const sessionId = segments[0];
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const newStatus = data.status as string;
+    if (!newStatus) return json({ error: "Campo 'status' obrigatório" }, 400);
+    if (!VALID_STATUSES.has(newStatus)) return json({ error: `Status inválido. Valores aceitos: ${[...VALID_STATUSES].join(", ")}` }, 400);
+
+    const updateData: Record<string, unknown> = { status: newStatus };
+
+    if (newStatus === "cancelled") {
+      await requireAdmin(req);
+      updateData.cancelled_at = new Date().toISOString();
+      updateData.cancel_reason = (data.cancel_reason as string) || "Sessão cancelada";
+      // Morada notification is skipped (stub)
+    }
+
+    const { data: updated, error } = await supabase.from("webinar_sessions").update(updateData).eq("id", sessionId).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(updated);
+  }
+
+  // GET /sessions/:id
+  if (method === "GET" && segments[0] && segments[0] !== "available") {
+    const { data, error } = await supabase.from("webinar_sessions").select("*").eq("id", segments[0]).maybeSingle();
+    if (error || !data) return json({ error: "Sessão não encontrada" }, 404);
+    return json(data);
+  }
+
+  // GET /sessions (list)
+  if (method === "GET") {
+    const dateFrom = url.searchParams.get("date_from");
+    const dateTo = url.searchParams.get("date_to");
+    const status = url.searchParams.get("status");
+    const closerId = url.searchParams.get("closer_id");
+
+    let q = supabase.from("webinar_sessions").select("*").order("date").order("starts_at");
+    if (dateFrom) q = q.gte("date", dateFrom);
+    if (dateTo) q = q.lte("date", dateTo);
+    if (status) q = q.eq("status", status);
+    if (closerId) q = q.eq("closer_id", closerId);
+    const { data } = await q;
+    return json(data || []);
+  }
+
+  // POST /sessions (admin)
+  if (method === "POST") {
+    await requireAdmin(req);
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (!data || Object.keys(data).length === 0) return json({ error: "Payload obrigatório" }, 400);
+    const { data: created, error } = await supabase.from("webinar_sessions").insert(data).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(created, 201);
+  }
+
+  return json({ error: "Method not allowed" }, 405);
+}
+
+// ── Registrations ─────────────────────────────────────────────────────────────
+
+const REG_REQUIRED = ["session_id", "name", "email", "phone"];
+
+function generateToken(): string {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr)).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" }[c] ?? c));
+}
+
+async function handleRegistrations(method: string, segments: string[], req: Request) {
+  const supabase = getSupabase();
+
+  // GET /registrations/validate
+  if (method === "GET" && segments[0] === "validate") {
+    const url = new URL(req.url);
+    const sessionId = url.searchParams.get("session_id");
+    const token = url.searchParams.get("token");
+    if (!sessionId || !token) return json({ error: "Parâmetros session_id e token são obrigatórios" }, 400);
+    const reg = await validateToken(supabase, sessionId, token);
+    if (!reg) return json({ error: "Token inválido ou expirado" }, 401);
+    return json(reg);
+  }
+
+  // POST /registrations/attend
+  if (method === "POST" && segments[0] === "attend") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const sessionId = data.session_id as string;
+    const token = data.token as string;
+    if (!sessionId || !token) return json({ error: "Campos session_id e token são obrigatórios" }, 400);
+    const reg = await validateToken(supabase, sessionId, token);
+    if (!reg) return json({ error: "Token inválido ou expirado" }, 401);
+    const now = new Date().toISOString();
+    const { data: updated } = await supabase
+      .from("webinar_registrations")
+      .update({ attended_at: now })
+      .eq("id", (reg as Record<string, unknown>).id)
+      .select()
+      .single();
+    return json(updated || { ...(reg as object), attended_at: now });
+  }
+
+  // POST /registrations/cancel
+  if (method === "POST" && segments[0] === "cancel") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const sessionId = data.session_id as string;
+    const token = data.token as string;
+    if (!sessionId || !token) return json({ error: "Campos session_id e token são obrigatórios" }, 400);
+    const reg = await validateToken(supabase, sessionId, token);
+    if (!reg) return json({ error: "Token inválido ou expirado" }, 401);
+    const now = new Date().toISOString();
+    const { data: updated } = await supabase
+      .from("webinar_registrations")
+      .update({ cancelled_at: now })
+      .eq("id", (reg as Record<string, unknown>).id)
+      .select()
+      .single();
+    return json(updated || { ...(reg as object), cancelled_at: now });
+  }
+
+  // POST /registrations (register lead)
+  if (method === "POST") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const missing = REG_REQUIRED.filter(f => !data[f]);
+    if (missing.length) return json({ error: `Campos obrigatórios ausentes: ${missing.join(", ")}` }, 400);
+
+    const sessionId = data.session_id as string;
+
+    const { data: session } = await supabase.from("webinar_sessions").select("*").eq("id", sessionId).maybeSingle();
+    if (!session) return json({ error: "Sessão não encontrada" }, 404);
+    if ((session as Record<string, unknown>).status === "cancelled") return json({ error: "Sessão cancelada" }, 409);
+
+    // Check capacity
+    const s = session as Record<string, unknown>;
+    let maxParticipants = (s.max_participants ?? 0) as number;
+    if (s.slot_id) {
+      const { data: slot } = await supabase.from("webinar_slots").select("max_participants").eq("id", s.slot_id).maybeSingle();
+      if (slot && (slot as Record<string, unknown>).max_participants) maxParticipants = (slot as Record<string, unknown>).max_participants as number;
+    }
+    if (maxParticipants > 0) {
+      const { count } = await supabase
+        .from("webinar_registrations")
+        .select("*", { count: "exact", head: true })
+        .eq("session_id", sessionId)
+        .is("cancelled_at", null);
+      if ((count ?? 0) >= maxParticipants) return json({ error: "Capacidade esgotada" }, 409);
+    }
+
+    const accessToken = generateToken();
+    const roomUrl = `/room/${sessionId}?token=${accessToken}`;
+
+    const registration = {
+      session_id: sessionId,
+      name: data.name,
+      email: data.email,
+      phone: data.phone,
+      access_token: accessToken,
+      room_url: roomUrl,
+    };
+
+    const { data: reg, error } = await supabase.from("webinar_registrations").insert(registration).select().single();
+    if (error) return json({ error: error.message }, 500);
+
+    return json({ access_token: accessToken, room_url: roomUrl, registration: reg }, 201);
+  }
+
+  return json({ error: "Method not allowed" }, 405);
+}
+
+// ── Messages ──────────────────────────────────────────────────────────────────
+
+const MAX_CONTENT_LENGTH = 500;
+
+async function handleMessages(method: string, segments: string[], req: Request) {
+  const supabase = getSupabase();
+
+  // POST /messages (send)
+  if (method === "POST") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const sessionId = data.session_id as string;
+    const token = data.token as string;
+    const content = (data.content as string) || "";
+
+    if (!sessionId || !token) return json({ error: "Campos session_id e token são obrigatórios" }, 400);
+    if (!content) return json({ error: "Campo content é obrigatório" }, 400);
+    if (content.length > MAX_CONTENT_LENGTH) return json({ error: `Mensagem deve ter no máximo ${MAX_CONTENT_LENGTH} caracteres` }, 400);
+
+    const reg = await validateToken(supabase, sessionId, token);
+    if (!reg) return json({ error: "Token inválido ou expirado" }, 401);
+
+    const r = reg as Record<string, unknown>;
+    const message = {
+      session_id: sessionId,
+      registration_id: r.id,
+      content,
+      sender_type: "lead",
+      sender_name: r.name || "",
+    };
+
+    const { data: created, error } = await supabase.from("webinar_messages").insert(message).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(created, 201);
+  }
+
+  // DELETE /messages/:id (soft delete, admin)
+  if (method === "DELETE" && segments[0]) {
+    await requireAdmin(req);
+    const { data: updated } = await supabase
+      .from("webinar_messages")
+      .update({ is_deleted: true })
+      .eq("id", segments[0])
+      .select()
+      .single();
+    return json(updated || { id: segments[0], is_deleted: true });
+  }
+
+  // GET /messages/:sessionId
+  if (method === "GET" && segments[0]) {
+    const { data } = await supabase
+      .from("webinar_messages")
+      .select("*")
+      .eq("session_id", segments[0])
+      .eq("is_deleted", false)
+      .order("created_at");
+    return json(data || []);
+  }
+
+  return json({ error: "Method not allowed" }, 405);
+}
+
+// ── Admin ─────────────────────────────────────────────────────────────────────
+
+async function handleAdmin(method: string, segments: string[], req: Request) {
+  const supabase = getSupabase();
+
+  // All admin routes require auth
+  await requireAdmin(req);
+
+  // GET /admin/dashboard
+  if (method === "GET" && segments[0] === "dashboard") {
+    const today = new Date().toISOString().split("T")[0];
+    const { data: sessionRows } = await supabase.from("webinar_sessions").select("id, status").eq("date", today);
+    const sessions = sessionRows || [];
+    const totalSessions = sessions.length;
+    const liveNow = sessions.filter((s: Record<string, unknown>) => s.status === "live").length;
+
+    const sessionIds = sessions.map((s: Record<string, unknown>) => s.id as string);
+    let registered = 0, attended = 0, converted = 0;
+
+    if (sessionIds.length) {
+      const { data: regs } = await supabase
+        .from("webinar_registrations")
+        .select("attended_at, converted")
+        .in("session_id", sessionIds)
+        .is("cancelled_at", null);
+      registered = (regs || []).length;
+      attended = (regs || []).filter((r: Record<string, unknown>) => r.attended_at).length;
+      converted = (regs || []).filter((r: Record<string, unknown>) => r.converted).length;
+    }
+
+    return json({
+      date: today,
+      sessions: totalSessions,
+      live_now: liveNow,
+      registered,
+      attended,
+      converted,
+      conversion_rate: attended > 0 ? Math.round((converted / attended) * 100 * 10) / 10 : 0,
+    });
+  }
+
+  // POST /admin/sessions/:id/cta
+  if (method === "POST" && segments[0] === "sessions" && segments[2] === "cta") {
+    const sessionId = segments[1];
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (data.active === undefined) return json({ error: "Campo 'active' obrigatório" }, 400);
+    const { data: updated } = await supabase
+      .from("webinar_sessions")
+      .update({ cta_active: Boolean(data.active) })
+      .eq("id", sessionId)
+      .select()
+      .single();
+    return json(updated || { id: sessionId, cta_active: Boolean(data.active) });
+  }
+
+  // POST /admin/sessions/:id/message
+  if (method === "POST" && segments[0] === "sessions" && segments[2] === "message") {
+    const sessionId = segments[1];
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    if (!data.content) return json({ error: "Campo 'content' obrigatório" }, 400);
+    const message = {
+      session_id: sessionId,
+      content: data.content,
+      sender_type: "presenter",
+      sender_name: (data.presenter_email as string) || "Apresentador",
+    };
+    const { data: created, error } = await supabase.from("webinar_messages").insert(message).select().single();
+    if (error) return json({ error: error.message }, 500);
+    return json(created, 201);
+  }
+
+  // GET /admin/sessions/:id/registrations
+  if (method === "GET" && segments[0] === "sessions" && segments[2] === "registrations") {
+    const sessionId = segments[1];
+    const { data } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("created_at");
+    return json(data || []);
+  }
+
+  // POST /admin/registrations/cta
+  if (method === "POST" && segments[0] === "registrations" && segments[1] === "cta") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const sessionId = data.session_id as string;
+    const token = data.token as string;
+    if (!sessionId || !token) return json({ error: "Campos session_id e token são obrigatórios" }, 400);
+
+    const reg = await validateToken(supabase, sessionId, token);
+    if (!reg) return json({ error: "Token inválido ou expirado" }, 401);
+
+    const r = reg as Record<string, unknown>;
+    const now = new Date().toISOString();
+    const { data: updated } = await supabase
+      .from("webinar_registrations")
+      .update({ converted: true, converted_at: now, cta_response: data.form_data })
+      .eq("id", r.id)
+      .select()
+      .single();
+    return json(updated || { ...r, converted: true, converted_at: now });
+  }
+
+  // GET /admin/registrations/export
+  if (method === "GET" && segments[0] === "registrations" && segments[1] === "export") {
+    const url = new URL(req.url);
+    const sessionId = url.searchParams.get("session_id");
+
+    let q = supabase.from("webinar_registrations").select("*").order("created_at");
+    if (sessionId) q = q.eq("session_id", sessionId);
+    const { data: regs } = await q;
+
+    // Fetch sessions for label
+    const sessionIds = [...new Set((regs || []).map((r: Record<string, unknown>) => r.session_id as string).filter(Boolean))];
+    const sessionsMap: Record<string, Record<string, unknown>> = {};
+    if (sessionIds.length) {
+      const { data: sessions } = await supabase.from("webinar_sessions").select("id, date, starts_at").in("id", sessionIds);
+      for (const s of sessions || []) sessionsMap[s.id as string] = s;
+    }
+
+    const lines: string[] = ["Nome,Email,Telefone,Sessão,Registrado em,Presente,Convertido"];
+    for (const r of regs || []) {
+      const rr = r as Record<string, unknown>;
+      const s = sessionsMap[rr.session_id as string] || {};
+      const label = `${s.date || ""} ${s.starts_at || ""}`.trim();
+      lines.push([
+        rr.name, rr.email, rr.phone, label, rr.created_at,
+        rr.attended_at ? "Sim" : "Não",
+        rr.converted ? "Sim" : "Não",
+      ].map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+    }
+
+    return csvResponse(lines.join("\n"), "registrations.csv");
+  }
+
+  return json({ error: "Route not found" }, 404);
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    const url = new URL(req.url);
+    // Strip /functions/v1/webinar-api prefix; remaining path starts after
+    const pathname = url.pathname.replace(/^\/functions\/v1\/webinar-api/, "").replace(/^\/api/, "");
+    // segments: ["closers", "slug"] or ["sessions", "available"] etc.
+    const segments = pathname.split("/").filter(Boolean);
+    const resource = segments[0];
+    const rest = segments.slice(1);
+    const method = req.method.toUpperCase();
+
+    if (resource === "closers") return await handleClosers(method, rest, req);
+    if (resource === "slots") return await handleSlots(method, rest, req);
+    if (resource === "sessions") return await handleSessions(method, rest, req);
+    if (resource === "registrations") return await handleRegistrations(method, rest, req);
+    if (resource === "messages") return await handleMessages(method, rest, req);
+    if (resource === "admin") return await handleAdmin(method, rest, req);
+
+    return json({ error: "Not found" }, 404);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg === "Unauthorized") return json({ error: "Unauthorized" }, 401);
+    if (msg === "Forbidden") return json({ error: "Forbidden" }, 403);
+    console.error("[webinar-api]", err);
+    return json({ error: "Internal server error" }, 500);
+  }
+});
