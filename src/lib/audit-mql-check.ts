@@ -306,12 +306,15 @@ export async function enrichBaserow(leads: LeadRecord[]): Promise<boolean> {
 
   try {
     const admin = createSquadSupabaseAdmin()
-    const { data } = await admin
+    const { data, error } = await admin
       .from("baserow_leads")
       .select("lead_ads_id")
       .in("lead_ads_id", ids)
 
-    const found = new Set((data || []).map((r: { lead_ads_id: string }) => r.lead_ads_id))
+    // Se a query falhar (RLS, timeout, etc), NÃO marcar ninguém — deixa undefined pra retry
+    if (error || !data) return false
+
+    const found = new Set(data.map((r: { lead_ads_id: string }) => r.lead_ads_id))
     for (const lead of toCheck) {
       lead.in_baserow = found.has(lead.leadgen_id)
     }
