@@ -286,7 +286,7 @@ const BASEROW_API = "https://api-baserow.seazone.com.br"
 const BASEROW_TABLES: Record<string, { tableId: number; field: string }> = {
   Investimentos: { tableId: 1208, field: "Lead Ads ID" },
   Marketplace:   { tableId: 1330, field: "Lead Ads Id" },
-  "Serviços":    { tableId: 1337, field: "Lead Ads ID" },
+  "Serviços":    { tableId: 1337, field: "leadgen_id" },
 }
 
 let _baserowToken: string | null = null
