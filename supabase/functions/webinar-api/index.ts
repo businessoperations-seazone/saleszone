@@ -373,22 +373,17 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
       if ((count ?? 0) >= maxParticipants) return json({ error: "Capacidade esgotada" }, 409);
     }
 
-    const accessToken = generateToken();
-    const roomUrl = `/room/${sessionId}?token=${accessToken}`;
-
-    const registration = {
+    // Let the DB generate access_token (uuid DEFAULT gen_random_uuid())
+    const { data: reg, error } = await supabase.from("webinar_registrations").insert({
       session_id: sessionId,
       name: data.name,
       email: data.email,
       phone: data.phone,
-      access_token: accessToken,
-      room_url: roomUrl,
-    };
-
-    const { data: reg, error } = await supabase.from("webinar_registrations").insert(registration).select().single();
+    }).select().single();
     if (error) return json({ error: error.message }, 500);
 
-    return json({ access_token: accessToken, room_url: roomUrl, registration: reg }, 201);
+    const roomUrl = `/webinar/sala/${sessionId}?token=${reg.access_token}`;
+    return json({ access_token: reg.access_token, room_url: roomUrl, registration: reg }, 201);
   }
 
   return json({ error: "Method not allowed" }, 405);
@@ -602,13 +597,17 @@ Deno.serve(async (req: Request) => {
 
   try {
     const url = new URL(req.url);
-    // Strip /functions/v1/webinar-api prefix; remaining path starts after
-    const pathname = url.pathname.replace(/^\/functions\/v1\/webinar-api/, "").replace(/^\/api/, "");
-    // segments: ["closers", "slug"] or ["sessions", "available"] etc.
+    const rawPath = url.pathname;
+    // Strip known prefixes
+    const pathname = rawPath
+      .replace(/^\/functions\/v1\/webinar-api/, "")
+      .replace(/^\/webinar-api/, "")
+      .replace(/^\/api/, "");
     const segments = pathname.split("/").filter(Boolean);
     const resource = segments[0];
     const rest = segments.slice(1);
     const method = req.method.toUpperCase();
+    console.log(`[webinar-api] ${method} ${rawPath} → resource=${resource} rest=${JSON.stringify(rest)}`);
 
     if (resource === "closers") return await handleClosers(method, rest, req);
     if (resource === "slots") return await handleSlots(method, rest, req);
