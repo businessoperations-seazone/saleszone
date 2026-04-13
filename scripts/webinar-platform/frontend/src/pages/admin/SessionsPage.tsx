@@ -193,6 +193,12 @@ export default function SessionsPage() {
                   <td className="px-4 py-3">
                     <div className="flex gap-3">
                       <Link
+                        to={`/admin/sessoes/${session.id}/inscritos`}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                      >
+                        Ver inscritos
+                      </Link>
+                      <Link
                         to={`/admin/sessoes/${session.id}/live`}
                         className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                       >

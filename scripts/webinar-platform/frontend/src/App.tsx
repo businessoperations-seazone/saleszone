@@ -10,6 +10,7 @@ import SlotsPage from "./pages/admin/SlotsPage";
 import SessionsPage from "./pages/admin/SessionsPage";
 import LiveControl from "./pages/admin/LiveControl";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
+import SessionRegistrations from "./pages/admin/SessionRegistrations";
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="slots" element={<SlotsPage />} />
           <Route path="sessoes" element={<SessionsPage />} />
           <Route path="sessoes/:sessionId/live" element={<LiveControl />} />
+          <Route path="sessoes/:sessionId/inscritos" element={<SessionRegistrations />} />
           <Route path="inscricoes" element={<RegistrationsPage />} />
         </Route>
       </Routes>
