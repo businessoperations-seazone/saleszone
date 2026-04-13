@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Calendar from "../components/Calendar";
 import TimeSlots from "../components/TimeSlots";
-import RegistrationForm from "../components/RegistrationForm";
 import type { Session, Closer } from "../lib/types";
 import { api } from "../lib/api";
 
@@ -19,19 +18,55 @@ function getNowPill(): string {
   return `Hoje é ${weekday}, ${hour}:${min}`;
 }
 
-type Step = "calendar" | "form" | "confirmed";
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  const date = d.toLocaleDateString("pt-BR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${date} às ${time}`;
+}
+
+interface DealInfo {
+  deal_id: string;
+  deal_url: string;
+  deal_title: string;
+  organization: string;
+  name: string;
+  email: string;
+  phone: string;
+}
+
+type Step = "deal" | "calendar" | "confirm" | "confirmed";
 
 export default function SchedulePage() {
   const { closerSlug } = useParams<{ closerSlug: string }>();
   const navigate = useNavigate();
   const [closer, setCloser] = useState<Closer | null>(null);
   const [closerError, setCloserError] = useState(false);
-  const [step, setStep] = useState<Step>("calendar");
+  const [step, setStep] = useState<Step>("deal");
+
+  // Deal step state
+  const [dealUrl, setDealUrl] = useState("");
+  const [dealInfo, setDealInfo] = useState<DealInfo | null>(null);
+  const [dealLoading, setDealLoading] = useState(false);
+  const [dealError, setDealError] = useState<string | null>(null);
+
+  // Calendar step state
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
+
+  // Confirm step state
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+
+  // Confirmed step
   const [roomUrl, setRoomUrl] = useState<string>("");
+
   const [nowPill] = useState(getNowPill);
 
   useEffect(() => {
@@ -55,19 +90,49 @@ export default function SchedulePage() {
       .finally(() => setLoadingSessions(false));
   }, [selectedDate, closerSlug]);
 
+  async function handleDealLookup() {
+    if (!dealUrl.trim()) {
+      setDealError("Cole o link do deal no Pipedrive");
+      return;
+    }
+    setDealError(null);
+    setDealLoading(true);
+    try {
+      const info = await api.lookupDeal(dealUrl.trim());
+      setDealInfo(info);
+      setStep("calendar");
+    } catch (err: unknown) {
+      setDealError(err instanceof Error ? err.message : "Erro ao buscar deal. Verifique o link.");
+    } finally {
+      setDealLoading(false);
+    }
+  }
+
   function handleSelectSession(session: Session) {
     setSelectedSession(session);
-    setStep("form");
+    setStep("confirm");
   }
 
-  function handleRegistered(url: string) {
-    setRoomUrl(url);
-    setStep("confirmed");
-  }
-
-  function handleBack() {
-    setSelectedSession(null);
-    setStep("calendar");
+  async function handleConfirm() {
+    if (!selectedSession || !dealInfo) return;
+    setConfirmError(null);
+    setConfirmLoading(true);
+    try {
+      const result = await api.register({
+        session_id: selectedSession.id,
+        name: dealInfo.name,
+        email: dealInfo.email,
+        phone: dealInfo.phone,
+        pipedrive_deal_url: dealInfo.deal_url,
+      });
+      const url = result?.room_url || `/webinar/sala/${selectedSession.id}`;
+      setRoomUrl(url);
+      setStep("confirmed");
+    } catch (err: unknown) {
+      setConfirmError(err instanceof Error ? err.message : "Erro ao confirmar inscrição. Tente novamente.");
+    } finally {
+      setConfirmLoading(false);
+    }
   }
 
   if (closerError) {
@@ -121,28 +186,75 @@ export default function SchedulePage() {
             </p>
           </div>
 
+          {/* Step: Deal lookup */}
+          {step === "deal" && (
+            <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
+              <h2 className="text-lg font-bold text-gray-900 mb-1">Vamos começar</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                Cole o link do deal no Pipedrive para identificarmos seus dados
+              </p>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="deal-url-input">
+                    Link do deal no Pipedrive
+                  </label>
+                  <input
+                    id="deal-url-input"
+                    type="url"
+                    value={dealUrl}
+                    onChange={(e) => setDealUrl(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleDealLookup(); }}
+                    placeholder="https://seazone-fd92b9.pipedrive.com/deal/12345"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm
+                      focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400
+                      placeholder:text-gray-300"
+                  />
+                </div>
+
+                {dealError && (
+                  <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{dealError}</p>
+                )}
+
+                <button
+                  onClick={handleDealLookup}
+                  disabled={dealLoading}
+                  className="w-full py-3 px-4 rounded-xl bg-[#0066CC] text-white text-sm font-semibold
+                    hover:bg-blue-700 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+                >
+                  {dealLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Buscando...
+                    </>
+                  ) : (
+                    "Buscar dados"
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Step: Calendar */}
-          {step === "calendar" && (
+          {step === "calendar" && dealInfo && (
             <>
-              {/* Hero section */}
-              <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6 mb-5">
-                <p className="text-base font-semibold text-slate-800 mb-4">
-                  Descubra como transformar seu imóvel em fonte de renda passiva
-                </p>
-                <ul className="space-y-2">
-                  <li className="flex items-start gap-2 text-sm text-slate-600">
-                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
-                    <span>Gestão completa: limpeza, precificação, atendimento 24/7</span>
-                  </li>
-                  <li className="flex items-start gap-2 text-sm text-slate-600">
-                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
-                    <span>+1000 imóveis gerenciados no Brasil</span>
-                  </li>
-                  <li className="flex items-start gap-2 text-sm text-slate-600">
-                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
-                    <span>Transparência total com portal do proprietário</span>
-                  </li>
-                </ul>
+              {/* Deal confirmation chip */}
+              <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-3 mb-5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <svg className="w-4 h-4 text-green-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-green-800 truncate">{dealInfo.deal_title}</p>
+                    <p className="text-xs text-green-600 truncate">{dealInfo.name}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setStep("deal"); setSelectedSession(null); setSelectedDate(null); }}
+                  className="text-xs text-green-700 underline underline-offset-2 hover:text-green-900 flex-shrink-0"
+                >
+                  alterar
+                </button>
               </div>
 
               <Calendar
@@ -150,6 +262,7 @@ export default function SchedulePage() {
                 onSelectDate={(date) => {
                   setSelectedDate(date);
                   setSelectedSession(null);
+                  setStep("calendar");
                 }}
               />
 
@@ -168,41 +281,87 @@ export default function SchedulePage() {
                   )}
                 </div>
               )}
-
-              {/* O que você vai descobrir */}
-              <div className="mt-5 bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
-                <p className="text-sm font-bold text-slate-800 mb-4 uppercase tracking-wide">
-                  O que você vai descobrir nesta apresentação
-                </p>
-                <div className="grid grid-cols-1 gap-3">
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl">💰</span>
-                    <span className="text-sm text-slate-600">Potencial de rentabilidade da sua propriedade</span>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl">📊</span>
-                    <span className="text-sm text-slate-600">Números reais de imóveis similares ao seu</span>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl">🔑</span>
-                    <span className="text-sm text-slate-600">Como funciona nosso modelo de gestão</span>
-                  </div>
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl">📱</span>
-                    <span className="text-sm text-slate-600">Ferramentas e acompanhamento em tempo real</span>
-                  </div>
-                </div>
-              </div>
             </>
           )}
 
-          {/* Step: Registration form */}
-          {step === "form" && selectedSession && (
-            <RegistrationForm
-              session={selectedSession}
-              onSuccess={handleRegistered}
-              onBack={handleBack}
-            />
+          {/* Step: Confirm */}
+          {step === "confirm" && dealInfo && selectedSession && (
+            <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6 space-y-5">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900 mb-1">Confirmar agendamento</h2>
+                <p className="text-sm text-gray-500">Verifique os dados antes de confirmar</p>
+              </div>
+
+              {/* Session info */}
+              <div className="bg-blue-50 rounded-xl px-4 py-3">
+                <p className="text-xs text-blue-500 uppercase font-semibold tracking-wide mb-1">Horário selecionado</p>
+                <p className="text-sm font-semibold text-blue-900">{formatDateTime(selectedSession.starts_at)}</p>
+                <button
+                  onClick={() => setStep("calendar")}
+                  className="text-xs text-blue-600 underline underline-offset-2 hover:text-blue-800 mt-1"
+                >
+                  alterar horário
+                </button>
+              </div>
+
+              {/* Deal info */}
+              <div className="bg-gray-50 rounded-xl px-4 py-3 space-y-3">
+                <p className="text-xs text-gray-500 uppercase font-semibold tracking-wide">Dados do lead</p>
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <p className="text-xs text-gray-400">Deal</p>
+                    <p className="text-sm font-medium text-gray-800">{dealInfo.deal_title}</p>
+                    {dealInfo.organization && (
+                      <p className="text-xs text-gray-500">{dealInfo.organization}</p>
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400">Nome</p>
+                    <p className="text-sm text-gray-800">{dealInfo.name || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400">E-mail</p>
+                    <p className="text-sm text-gray-800">{dealInfo.email || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-400">Telefone</p>
+                    <p className="text-sm text-gray-800">{dealInfo.phone || "—"}</p>
+                  </div>
+                </div>
+              </div>
+
+              {confirmError && (
+                <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{confirmError}</p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setStep("calendar")}
+                  disabled={confirmLoading}
+                  className="flex-1 py-3 px-4 rounded-xl border border-gray-200 text-sm font-medium
+                    text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  disabled={confirmLoading}
+                  className="flex-1 py-3 px-4 rounded-xl bg-[#0066CC] text-white text-sm font-semibold
+                    hover:bg-blue-700 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+                >
+                  {confirmLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Aguarde...
+                    </>
+                  ) : (
+                    "Confirmar agendamento"
+                  )}
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Step: Confirmed */}

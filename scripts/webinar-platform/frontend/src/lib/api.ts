@@ -24,6 +24,11 @@ export const api = {
     request<Session>(`/api/sessions/${id}`),
   register: (data: { session_id: string; name: string; email: string; phone: string; pipedrive_deal_url?: string }) =>
     request<any>("/api/registrations/", { method: "POST", body: JSON.stringify(data) }),
+  lookupDeal: (dealUrl: string) =>
+    request<{ deal_id: string; deal_url: string; deal_title: string; organization: string; name: string; email: string; phone: string }>(
+      "/api/pipedrive/lookup",
+      { method: "POST", body: JSON.stringify({ deal_url: dealUrl }) }
+    ),
   validateToken: (sessionId: string, token: string) =>
     request<any>(`/api/registrations/validate?session_id=${sessionId}&token=${token}`),
   markAttended: (sessionId: string, token: string) =>
