@@ -124,6 +124,27 @@ export default function SchedulePage() {
           {/* Step: Calendar */}
           {step === "calendar" && (
             <>
+              {/* Hero section */}
+              <div className="bg-white rounded-2xl shadow-sm border border-blue-100 p-6 mb-5">
+                <p className="text-base font-semibold text-slate-800 mb-4">
+                  Descubra como transformar seu imóvel em fonte de renda passiva
+                </p>
+                <ul className="space-y-2">
+                  <li className="flex items-start gap-2 text-sm text-slate-600">
+                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
+                    <span>Gestão completa: limpeza, precificação, atendimento 24/7</span>
+                  </li>
+                  <li className="flex items-start gap-2 text-sm text-slate-600">
+                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
+                    <span>+1000 imóveis gerenciados no Brasil</span>
+                  </li>
+                  <li className="flex items-start gap-2 text-sm text-slate-600">
+                    <span className="text-[#0066CC] font-bold mt-0.5">✓</span>
+                    <span>Transparência total com portal do proprietário</span>
+                  </li>
+                </ul>
+              </div>
+
               <Calendar
                 selectedDate={selectedDate}
                 onSelectDate={(date) => {
@@ -147,6 +168,31 @@ export default function SchedulePage() {
                   )}
                 </div>
               )}
+
+              {/* O que você vai descobrir */}
+              <div className="mt-5 bg-white rounded-2xl shadow-sm border border-blue-100 p-6">
+                <p className="text-sm font-bold text-slate-800 mb-4 uppercase tracking-wide">
+                  O que você vai descobrir nesta apresentação
+                </p>
+                <div className="grid grid-cols-1 gap-3">
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">💰</span>
+                    <span className="text-sm text-slate-600">Potencial de rentabilidade da sua propriedade</span>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">📊</span>
+                    <span className="text-sm text-slate-600">Números reais de imóveis similares ao seu</span>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">🔑</span>
+                    <span className="text-sm text-slate-600">Como funciona nosso modelo de gestão</span>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <span className="text-xl">📱</span>
+                    <span className="text-sm text-slate-600">Ferramentas e acompanhamento em tempo real</span>
+                  </div>
+                </div>
+              </div>
             </>
           )}
 
