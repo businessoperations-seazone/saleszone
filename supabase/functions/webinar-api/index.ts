@@ -231,6 +231,292 @@ function buildConfirmationEmail(
 </html>`;
 }
 
+// ── Time helpers ──────────────────────────────────────────────────────────────
+
+function formatTimeBR(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" });
+}
+
+function formatDateBR(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+  });
+}
+
+// ── Reminder email templates ───────────────────────────────────────────────────
+
+function buildReminder24hEmail(
+  leadName: string,
+  closerName: string,
+  startsAt: string,
+  roomUrl: string
+): string {
+  const firstName = leadName.split(" ")[0];
+  const timeStr = formatTimeBR(startsAt);
+  const dateStr = formatDateBR(startsAt);
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#0f172a;padding:28px 40px;text-align:center;">
+              <h1 style="color:#ffffff;font-size:22px;margin:0;letter-spacing:0.5px;">Seazone Investimentos</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 32px;color:#1e293b;">
+              <p style="font-size:18px;font-weight:bold;margin:0 0 16px;">Olá, ${firstName}! 🗓️</p>
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Sua apresentação Seazone é <strong>amanhã</strong>! Não esqueça de reservar um tempinho para estar presente.
+              </p>
+              <!-- Info box -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#fefce8;border-left:4px solid #eab308;border-radius:4px;margin-bottom:28px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 8px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Data e horário</p>
+                    <p style="margin:0;font-size:16px;font-weight:bold;color:#0f172a;text-transform:capitalize;">${dateStr} às ${timeStr} (BRT)</p>
+                  </td>
+                </tr>
+              </table>
+              <!-- CTA -->
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Clique no botão abaixo para acessar a sala no momento da apresentação:
+              </p>
+              <table cellpadding="0" cellspacing="0" style="margin:0 auto 32px;">
+                <tr>
+                  <td style="background:#0ea5e9;border-radius:6px;">
+                    <a href="${roomUrl}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none;">Acessar a sala</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 32px;">
+                Qualquer dúvida, é só responder a este e-mail.
+              </p>
+              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 24px;">
+              <p style="font-size:14px;color:#1e293b;margin:0;">
+                Abraço,<br>
+                <strong>${closerName}</strong><br>
+                <span style="color:#64748b;">Seazone Investimentos</span>
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">
+                © ${new Date().getFullYear()} Seazone Investimentos · Este é um e-mail automático, não responda caso não reconheça este agendamento.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+function buildReminder1hEmail(
+  leadName: string,
+  closerName: string,
+  startsAt: string,
+  roomUrl: string
+): string {
+  const firstName = leadName.split(" ")[0];
+  const timeStr = formatTimeBR(startsAt);
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#0f172a;padding:28px 40px;text-align:center;">
+              <h1 style="color:#ffffff;font-size:22px;margin:0;letter-spacing:0.5px;">Seazone Investimentos</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 32px;color:#1e293b;">
+              <p style="font-size:18px;font-weight:bold;margin:0 0 16px;">Olá, ${firstName}! ⏰</p>
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Falta <strong>1 hora</strong> para a sua apresentação Seazone começar às <strong>${timeStr} (BRT)</strong>!
+              </p>
+              <!-- Info box -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#fff7ed;border-left:4px solid #f97316;border-radius:4px;margin-bottom:28px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 8px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Começa em breve</p>
+                    <p style="margin:0;font-size:16px;font-weight:bold;color:#0f172a;">Hoje às ${timeStr} (BRT)</p>
+                  </td>
+                </tr>
+              </table>
+              <!-- CTA -->
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Clique no botão abaixo para entrar na sala quando estiver pronto:
+              </p>
+              <table cellpadding="0" cellspacing="0" style="margin:0 auto 32px;">
+                <tr>
+                  <td style="background:#f97316;border-radius:6px;">
+                    <a href="${roomUrl}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none;">Entrar na sala agora</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 32px;">
+                Qualquer dúvida, é só responder a este e-mail.
+              </p>
+              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 24px;">
+              <p style="font-size:14px;color:#1e293b;margin:0;">
+                Abraço,<br>
+                <strong>${closerName}</strong><br>
+                <span style="color:#64748b;">Seazone Investimentos</span>
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">
+                © ${new Date().getFullYear()} Seazone Investimentos · Este é um e-mail automático, não responda caso não reconheça este agendamento.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ── Internal: send reminders ───────────────────────────────────────────────────
+
+async function handleInternalReminders(req: Request) {
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  const supabase = getSupabase();
+  const now = new Date();
+
+  // 24h window: sessions starting 23h to 25h from now
+  const win24Start = new Date(now.getTime() + 23 * 3_600_000).toISOString();
+  const win24End   = new Date(now.getTime() + 25 * 3_600_000).toISOString();
+
+  // 1h window: sessions starting 30min to 90min from now
+  const win1Start  = new Date(now.getTime() + 30 * 60_000).toISOString();
+  const win1End    = new Date(now.getTime() + 90 * 60_000).toISOString();
+
+  let sent24 = 0, sent1 = 0, errors = 0;
+
+  // ── 24h reminders ──────────────────────────────────────────────────────────
+  const { data: sessions24 } = await supabase
+    .from("webinar_sessions")
+    .select("*, webinar_closers(*)")
+    .eq("status", "scheduled")
+    .gte("starts_at", win24Start)
+    .lte("starts_at", win24End);
+
+  for (const session of sessions24 || []) {
+    const s = session as Record<string, unknown>;
+    const closer = (s.webinar_closers as Record<string, unknown> | null) || null;
+    const closerEmail = (closer?.email as string) || "gabriela.lemos@seazone.com.br";
+    const closerName  = (closer?.name  as string) || "Equipe Seazone";
+
+    const { data: regs } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .eq("session_id", s.id as string)
+      .is("cancelled_at", null)
+      .is("reminder_24h_sent_at", null);
+
+    for (const reg of regs || []) {
+      const r = reg as Record<string, unknown>;
+      try {
+        const roomUrl = `${FRONTEND_URL}/webinar/sala/${s.id}?token=${r.access_token}`;
+        const html = buildReminder24hEmail(r.name as string, closerName, s.starts_at as string, roomUrl);
+        await sendEmail(
+          closerEmail,
+          r.email as string,
+          `Sua apresentação Seazone é amanhã às ${formatTimeBR(s.starts_at as string)}`,
+          html
+        );
+        await supabase
+          .from("webinar_registrations")
+          .update({ reminder_24h_sent_at: new Date().toISOString() })
+          .eq("id", r.id as string);
+        sent24++;
+      } catch (err) {
+        console.error(`[reminder-24h] Failed for ${r.email}:`, err);
+        errors++;
+      }
+    }
+  }
+
+  // ── 1h reminders ───────────────────────────────────────────────────────────
+  const { data: sessions1 } = await supabase
+    .from("webinar_sessions")
+    .select("*, webinar_closers(*)")
+    .eq("status", "scheduled")
+    .gte("starts_at", win1Start)
+    .lte("starts_at", win1End);
+
+  for (const session of sessions1 || []) {
+    const s = session as Record<string, unknown>;
+    const closer = (s.webinar_closers as Record<string, unknown> | null) || null;
+    const closerEmail = (closer?.email as string) || "gabriela.lemos@seazone.com.br";
+    const closerName  = (closer?.name  as string) || "Equipe Seazone";
+
+    const { data: regs } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .eq("session_id", s.id as string)
+      .is("cancelled_at", null)
+      .is("reminder_1h_sent_at", null);
+
+    for (const reg of regs || []) {
+      const r = reg as Record<string, unknown>;
+      try {
+        const roomUrl = `${FRONTEND_URL}/webinar/sala/${s.id}?token=${r.access_token}`;
+        const html = buildReminder1hEmail(r.name as string, closerName, s.starts_at as string, roomUrl);
+        await sendEmail(
+          closerEmail,
+          r.email as string,
+          `Falta 1 hora! Sua apresentação Seazone começa às ${formatTimeBR(s.starts_at as string)}`,
+          html
+        );
+        await supabase
+          .from("webinar_registrations")
+          .update({ reminder_1h_sent_at: new Date().toISOString() })
+          .eq("id", r.id as string);
+        sent1++;
+      } catch (err) {
+        console.error(`[reminder-1h] Failed for ${r.email}:`, err);
+        errors++;
+      }
+    }
+  }
+
+  console.log(`[webinar-api] Reminders: sent_24h=${sent24} sent_1h=${sent1} errors=${errors}`);
+  return json({ sent_24h: sent24, sent_1h: sent1, errors });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function requireAdmin(req: Request): Promise<Record<string, unknown>> {
   const auth = req.headers.get("Authorization") || "";
   if (!auth.startsWith("Bearer ")) throw new Error("Unauthorized");
@@ -840,6 +1126,7 @@ Deno.serve(async (req: Request) => {
     if (resource === "registrations") return await handleRegistrations(method, rest, req);
     if (resource === "messages") return await handleMessages(method, rest, req);
     if (resource === "admin") return await handleAdmin(method, rest, req);
+    if (resource === "internal" && rest[0] === "send-reminders") return await handleInternalReminders(req);
 
     return json({ error: "Not found" }, 404);
   } catch (err) {
