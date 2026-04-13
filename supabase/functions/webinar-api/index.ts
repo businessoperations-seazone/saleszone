@@ -667,6 +667,18 @@ async function handleSessions(method: string, segments: string[], req: Request) 
   if (method === "GET" && segments[0] && segments[0] !== "available") {
     const { data, error } = await supabase.from("webinar_sessions").select("*").eq("id", segments[0]).maybeSingle();
     if (error || !data) return json({ error: "Sessão não encontrada" }, 404);
+    // Include closer info for frontend routing
+    if (data.closer_id) {
+      const { data: closer } = await supabase
+        .from("webinar_closers")
+        .select("slug, name")
+        .eq("id", data.closer_id)
+        .maybeSingle();
+      if (closer) {
+        data.closer_slug = closer.slug;
+        data.closer_name = closer.name;
+      }
+    }
     return json(data);
   }
 
@@ -1069,6 +1081,56 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
   return json({ error: "Route not found" }, 404);
 }
 
+// ── Pipedrive Lookup ──────────────────────────────────────────────────────────
+
+async function handlePipedriveLookup(req: Request) {
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  const body = await req.json().catch(() => ({}));
+  const dealUrl = body.deal_url as string;
+  if (!dealUrl) return json({ error: "deal_url obrigatório" }, 400);
+
+  // Extract deal ID from URL — supports formats like:
+  // https://seazone-fd92b9.pipedrive.com/deal/12345
+  // https://seazone-fd92b9.pipedrive.com/deal/12345/something
+  const match = dealUrl.match(/\/deal\/(\d+)/);
+  if (!match) return json({ error: "URL do deal inválida" }, 400);
+  const dealId = match[1];
+
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return json({ error: "Pipedrive não configurado" }, 500);
+
+  // Fetch deal
+  const dealResp = await fetch(
+    `https://seazone-fd92b9.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`
+  );
+  const dealData = await dealResp.json();
+  if (!dealData.success || !dealData.data) {
+    return json({ error: "Deal não encontrado no Pipedrive" }, 404);
+  }
+  const deal = dealData.data;
+
+  // Get person if attached
+  let person = null;
+  if (deal.person_id?.value) {
+    const personResp = await fetch(
+      `https://seazone-fd92b9.pipedrive.com/api/v1/persons/${deal.person_id.value}?api_token=${token}`
+    );
+    const personData = await personResp.json();
+    if (personData.success) person = personData.data;
+  }
+
+  return json({
+    deal_id: dealId,
+    deal_url: dealUrl,
+    deal_title: deal.title,
+    organization: deal.org_name,
+    name: person?.name || deal.person_id?.name || "",
+    email: person?.email?.[0]?.value || "",
+    phone: person?.phone?.[0]?.value || "",
+  });
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -1097,6 +1159,7 @@ Deno.serve(async (req: Request) => {
     if (resource === "messages") return await handleMessages(method, rest, req);
     if (resource === "admin") return await handleAdmin(method, rest, req);
     if (resource === "internal" && rest[0] === "send-reminders") return await handleInternalReminders(req);
+    if (resource === "pipedrive" && rest[0] === "lookup") return await handlePipedriveLookup(req);
 
     return json({ error: "Not found" }, 404);
   } catch (err) {
