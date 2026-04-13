@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useParams, useOutletContext, Link } from "react-router-dom";
 import { api } from "../../lib/api";
 
@@ -40,14 +40,14 @@ interface DetailsData {
   registrations: Registration[];
 }
 
-const STATUS_LABELS: Record<string, string> = {
+const SESSION_STATUS_LABELS: Record<string, string> = {
   scheduled: "Agendada",
   live: "Ao vivo",
   ended: "Encerrada",
   cancelled: "Cancelada",
 };
 
-const STATUS_COLORS: Record<string, string> = {
+const SESSION_STATUS_COLORS: Record<string, string> = {
   scheduled: "bg-gray-100 text-gray-700",
   live: "bg-green-100 text-green-700",
   ended: "bg-blue-100 text-blue-700",
@@ -69,17 +69,55 @@ function formatDateTime(iso: string) {
   return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function regStatus(reg: Registration): string {
+type RegStatus = "Confirmado" | "Presente" | "Convertido" | "Cancelado";
+
+function getRegStatus(reg: Registration): RegStatus {
   if (reg.cancelled_at) return "Cancelado";
+  if (reg.converted) return "Convertido";
   if (reg.attended_at) return "Presente";
-  return "Inscrito";
+  return "Confirmado";
 }
 
-function regStatusColor(reg: Registration): string {
-  if (reg.cancelled_at) return "bg-red-50 text-red-700";
-  if (reg.attended_at) return "bg-green-50 text-green-700";
-  return "bg-blue-50 text-blue-700";
+function StatusBadge({ reg }: { reg: Registration }) {
+  const status = getRegStatus(reg);
+  const styles: Record<RegStatus, string> = {
+    Confirmado: "bg-blue-100 text-blue-700 border border-blue-200",
+    Presente: "bg-green-100 text-green-700 border border-green-200",
+    Convertido: "bg-amber-100 text-amber-700 border border-amber-200",
+    Cancelado: "bg-gray-100 text-gray-400 border border-gray-200 line-through",
+  };
+  const icons: Record<RegStatus, React.ReactElement> = {
+    Confirmado: (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+    Presente: (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+    ),
+    Convertido: (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    ),
+    Cancelado: (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    ),
+  };
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${styles[status]}`}>
+      {icons[status]}
+      {status}
+    </span>
+  );
 }
+
+type SortKey = "name" | "created_at" | "status";
+type SortDir = "asc" | "desc";
 
 export default function SessionRegistrations() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -87,6 +125,9 @@ export default function SessionRegistrations() {
   const [data, setData] = useState<DetailsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("created_at");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const load = useCallback(async () => {
     if (!sessionId || !token) return;
@@ -105,6 +146,37 @@ export default function SessionRegistrations() {
   useEffect(() => {
     load();
   }, [load]);
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  }
+
+  function getSortedRegistrations(regs: Registration[]) {
+    return [...regs].sort((a, b) => {
+      let valA: string | number = "";
+      let valB: string | number = "";
+      if (sortKey === "name") { valA = a.name.toLowerCase(); valB = b.name.toLowerCase(); }
+      if (sortKey === "created_at") { valA = a.created_at; valB = b.created_at; }
+      if (sortKey === "status") {
+        const order: Record<RegStatus, number> = { Cancelado: 4, Confirmado: 3, Presente: 2, Convertido: 1 };
+        valA = order[getRegStatus(a)];
+        valB = order[getRegStatus(b)];
+      }
+      if (valA < valB) return sortDir === "asc" ? -1 : 1;
+      if (valA > valB) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+  }
+
+  function SortIcon({ col }: { col: SortKey }) {
+    if (sortKey !== col) return <span className="opacity-30 ml-1">↕</span>;
+    return <span className="ml-1">{sortDir === "asc" ? "↑" : "↓"}</span>;
+  }
 
   if (loading) {
     return (
@@ -126,7 +198,18 @@ export default function SessionRegistrations() {
 
   if (!data) return null;
 
-  const { session, stats, registrations } = data;
+  const { session, registrations } = data;
+
+  // Compute stats from registrations (more accurate than backend stats)
+  const activeRegs = registrations.filter((r) => !r.cancelled_at);
+  const totalCount = registrations.length;
+  const presentCount = registrations.filter((r) => !!r.attended_at && !r.cancelled_at).length;
+  const convertedCount = registrations.filter((r) => r.converted && !r.cancelled_at).length;
+  const cancelledCount = registrations.filter((r) => !!r.cancelled_at).length;
+
+  const exportUrl = sessionId ? api.admin.exportCSV(token, sessionId) : null;
+
+  const sorted = getSortedRegistrations(registrations);
 
   return (
     <div className="p-6">
@@ -153,10 +236,22 @@ export default function SessionRegistrations() {
               </p>
             )}
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[session.status] ?? "bg-gray-100 text-gray-700"}`}>
-              {STATUS_LABELS[session.status] ?? session.status}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${SESSION_STATUS_COLORS[session.status] ?? "bg-gray-100 text-gray-700"}`}>
+              {SESSION_STATUS_LABELS[session.status] ?? session.status}
             </span>
+            {exportUrl && (
+              <a
+                href={exportUrl}
+                download
+                className="flex items-center gap-1.5 bg-gray-100 text-gray-700 rounded-lg px-3 py-2 text-sm font-semibold hover:bg-gray-200 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Exportar inscritos
+              </a>
+            )}
             <button
               onClick={load}
               className="flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-blue-700 transition-colors"
@@ -170,71 +265,182 @@ export default function SessionRegistrations() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
+      {/* Stats summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-          <p className="text-xs text-gray-500 mt-0.5 uppercase tracking-wide font-medium">Inscritos</p>
+          <p className="text-2xl font-bold text-gray-900">{totalCount}</p>
+          <p className="text-xs text-gray-500 mt-0.5 font-medium">Inscritos</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <p className="text-2xl font-bold text-blue-600">{stats.confirmed}</p>
-          <p className="text-xs text-gray-500 mt-0.5 uppercase tracking-wide font-medium">Confirmados</p>
+        <div className="bg-white rounded-xl border border-blue-200 p-4 text-center">
+          <p className="text-2xl font-bold text-blue-600">{activeRegs.length}</p>
+          <p className="text-xs text-blue-500 mt-0.5 font-medium">Confirmados</p>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <p className="text-2xl font-bold text-green-600">{stats.attended}</p>
-          <p className="text-xs text-gray-500 mt-0.5 uppercase tracking-wide font-medium">Presentes</p>
+        <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
+          <p className="text-2xl font-bold text-green-600">{presentCount}</p>
+          <p className="text-xs text-green-500 mt-0.5 font-medium">Presentes</p>
         </div>
+        <div className="bg-white rounded-xl border border-amber-200 p-4 text-center">
+          <p className="text-2xl font-bold text-amber-600">{convertedCount}</p>
+          <p className="text-xs text-amber-500 mt-0.5 font-medium">Convertidos</p>
+        </div>
+      </div>
+
+      {/* Presença section */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5 mb-5">
+        <h3 className="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2">
+          <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          Lista de presença
+        </h3>
+        <p className="text-sm text-gray-400 italic">
+          Presenca detectada via Fireflies — em breve
+        </p>
       </div>
 
       {/* Table */}
       {registrations.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400 text-sm">
-          Nenhuma inscrição encontrada para esta sessão.
+        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+          <svg className="w-10 h-10 text-gray-200 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <p className="text-gray-400 text-sm font-medium">Ninguém se inscreveu ainda nesta sessão</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          {/* Summary line */}
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+            <span>{totalCount} inscritos</span>
+            <span className="text-gray-300">·</span>
+            <span className="text-green-600 font-medium">{presentCount} presentes</span>
+            <span className="text-gray-300">·</span>
+            <span className="text-amber-600 font-medium">{convertedCount} convertidos</span>
+            {cancelledCount > 0 && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="text-gray-400">{cancelledCount} cancelados</span>
+              </>
+            )}
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b border-gray-200">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Deal Pipedrive</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Inscrito em</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</th>
+                  <th
+                    className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-800 select-none"
+                    onClick={() => handleSort("name")}
+                  >
+                    Nome <SortIcon col="name" />
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Contato
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide hidden sm:table-cell">
+                    Deal Pipedrive
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-800 select-none hidden md:table-cell"
+                    onClick={() => handleSort("created_at")}
+                  >
+                    Inscrito em <SortIcon col="created_at" />
+                  </th>
+                  <th
+                    className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-800 select-none"
+                    onClick={() => handleSort("status")}
+                  >
+                    Status <SortIcon col="status" />
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {registrations.map((reg) => (
-                  <tr key={reg.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-medium text-gray-900">{reg.name}</td>
-                    <td className="px-4 py-3 text-gray-600">{reg.email}</td>
-                    <td className="px-4 py-3 text-gray-600">{reg.phone}</td>
-                    <td className="px-4 py-3">
-                      {reg.pipedrive_deal_url ? (
-                        <a
-                          href={reg.pipedrive_deal_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium text-xs"
-                        >
-                          Ver deal
-                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                          </svg>
-                        </a>
-                      ) : (
-                        <span className="text-gray-300 text-xs">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">{formatDateTime(reg.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${regStatusColor(reg)}`}>
-                        {regStatus(reg)}
-                      </span>
-                    </td>
-                  </tr>
+                {sorted.map((reg) => (
+                  <>
+                    <tr
+                      key={reg.id}
+                      className="hover:bg-gray-50 transition-colors cursor-pointer"
+                      onClick={() => setExpandedRow(expandedRow === reg.id ? null : reg.id)}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-xs font-bold text-blue-600">
+                              {reg.name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <span className="font-medium text-gray-900">{reg.name}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-gray-700 text-xs">{reg.email}</p>
+                          <p className="text-gray-500 text-xs">{reg.phone}</p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        {reg.pipedrive_deal_url ? (
+                          <a
+                            href={reg.pipedrive_deal_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-medium text-xs"
+                          >
+                            Ver deal
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs hidden md:table-cell">
+                        {formatDateTime(reg.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge reg={reg} />
+                      </td>
+                    </tr>
+                    {/* Expanded row */}
+                    {expandedRow === reg.id && (
+                      <tr key={`${reg.id}-expanded`} className="bg-blue-50/50">
+                        <td colSpan={5} className="px-4 py-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                            <div>
+                              <p className="text-gray-400 font-medium mb-1">Inscrito em</p>
+                              <p className="text-gray-700">{formatDateTime(reg.created_at)}</p>
+                            </div>
+                            {reg.attended_at && (
+                              <div>
+                                <p className="text-gray-400 font-medium mb-1">Presente em</p>
+                                <p className="text-green-700">{formatDateTime(reg.attended_at)}</p>
+                              </div>
+                            )}
+                            {reg.cancelled_at && (
+                              <div>
+                                <p className="text-gray-400 font-medium mb-1">Cancelado em</p>
+                                <p className="text-red-600">{formatDateTime(reg.cancelled_at)}</p>
+                              </div>
+                            )}
+                            {reg.pipedrive_deal_url && (
+                              <div>
+                                <p className="text-gray-400 font-medium mb-1">Deal Pipedrive</p>
+                                <a
+                                  href={reg.pipedrive_deal_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:underline break-all"
+                                >
+                                  {reg.pipedrive_deal_url}
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>
