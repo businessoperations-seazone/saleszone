@@ -37,103 +37,26 @@ function getSupabase() {
   );
 }
 
-// ── Gmail helpers ─────────────────────────────────────────────────────────────
+// ── Email via Resend ──────────────────────────────────────────────────────────
 
-function pemToArrayBuffer(pem: string): ArrayBuffer {
-  const b64 = pem
-    .replace(/-----BEGIN.*?-----/g, "")
-    .replace(/-----END.*?-----/g, "")
-    .replace(/\s/g, "");
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
+async function sendEmail(senderName: string, to: string, subject: string, html: string): Promise<void> {
+  const apiKey = Deno.env.get("RESEND_API_KEY");
+  if (!apiKey) throw new Error("RESEND_API_KEY not configured");
 
-async function importPrivateKey(pem: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "pkcs8",
-    pemToArrayBuffer(pem),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-}
+  // Use Resend default domain for now (until seazone.com.br is verified in Resend)
+  const from = `${senderName} <onboarding@resend.dev>`;
 
-function base64url(data: Uint8Array | ArrayBuffer): string {
-  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
-  return btoa(String.fromCharCode(...bytes))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-async function getGmailAccessToken(sa: Record<string, string>, impersonate: string): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const header = { alg: "RS256", typ: "JWT" };
-  const claim = {
-    iss: sa.client_email,
-    sub: impersonate,
-    scope: "https://www.googleapis.com/auth/gmail.send",
-    aud: "https://oauth2.googleapis.com/token",
-    iat: now,
-    exp: now + 3600,
-  };
-  const enc = (obj: unknown) =>
-    btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const unsigned = `${enc(header)}.${enc(claim)}`;
-  const key = await importPrivateKey(sa.private_key);
-  const sig = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    new TextEncoder().encode(unsigned)
-  );
-  const jwt = `${unsigned}.${base64url(sig)}`;
-
-  const resp = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
-  });
-  const tokenData = await resp.json();
-  if (!tokenData.access_token) throw new Error(`Gmail OAuth error: ${JSON.stringify(tokenData)}`);
-  return tokenData.access_token;
-}
-
-async function sendEmail(impersonate: string, to: string, subject: string, html: string): Promise<void> {
-  const supabase = getSupabase();
-  const { data: saJson } = await supabase.rpc("vault_read_secret", { secret_name: "GOOGLE_SERVICE_ACCOUNT" });
-  if (!saJson) throw new Error("GOOGLE_SERVICE_ACCOUNT not found in vault");
-  const sa = JSON.parse(saJson.trim());
-
-  const token = await getGmailAccessToken(sa, impersonate);
-
-  const message = [
-    `From: ${impersonate}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `MIME-Version: 1.0`,
-    `Content-Type: text/html; charset=utf-8`,
-    ``,
-    html,
-  ].join("\r\n");
-
-  const raw = btoa(unescape(encodeURIComponent(message)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
-  const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+  const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${token}`,
+      "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ raw }),
+    body: JSON.stringify({ from, to, subject, html }),
   });
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`Gmail API error: ${resp.status} ${err}`);
+    throw new Error(`Resend API error: ${resp.status} ${err}`);
   }
 }
 
@@ -450,7 +373,7 @@ async function handleInternalReminders(req: Request) {
         const roomUrl = `${FRONTEND_URL}/webinar/sala/${s.id}?token=${r.access_token}`;
         const html = buildReminder24hEmail(r.name as string, closerName, s.starts_at as string, roomUrl);
         await sendEmail(
-          closerEmail,
+          closerName,
           r.email as string,
           `Sua apresentação Seazone é amanhã às ${formatTimeBR(s.starts_at as string)}`,
           html
@@ -494,7 +417,7 @@ async function handleInternalReminders(req: Request) {
         const roomUrl = `${FRONTEND_URL}/webinar/sala/${s.id}?token=${r.access_token}`;
         const html = buildReminder1hEmail(r.name as string, closerName, s.starts_at as string, roomUrl);
         await sendEmail(
-          closerEmail,
+          closerName,
           r.email as string,
           `Falta 1 hora! Sua apresentação Seazone começa às ${formatTimeBR(s.starts_at as string)}`,
           html
@@ -872,23 +795,25 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     }
 
     // Let the DB generate access_token (uuid DEFAULT gen_random_uuid())
-    const { data: reg, error } = await supabase.from("webinar_registrations").insert({
+    const insertPayload: Record<string, unknown> = {
       session_id: sessionId,
       name: data.name,
       email: data.email,
       phone: data.phone,
-    }).select().single();
+    };
+    if (data.pipedrive_deal_url) insertPayload.pipedrive_deal_url = data.pipedrive_deal_url;
+
+    const { data: reg, error } = await supabase.from("webinar_registrations").insert(insertPayload).select().single();
     if (error) return json({ error: error.message }, 500);
 
     const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${reg.access_token}`;
 
     // Send confirmation email — best-effort (do not fail registration if email fails)
     try {
-      const senderEmail = (closer?.email as string) || "gabriela.lemos@seazone.com.br";
       const senderName = (closer?.name as string) || "Gabriela Lemos";
       const startsAt = (s.starts_at as string) || new Date().toISOString();
       const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl);
-      await sendEmail(senderEmail, data.email as string, "Seu agendamento na Seazone está confirmado!", htmlBody);
+      await sendEmail(senderName, data.email as string, "Seu agendamento na Seazone está confirmado!", htmlBody);
       console.log(`[webinar-api] Confirmation email sent to ${data.email}`);
     } catch (emailErr) {
       console.error("[webinar-api] Failed to send confirmation email:", emailErr);
@@ -1041,6 +966,46 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
       .eq("session_id", sessionId)
       .order("created_at");
     return json(data || []);
+  }
+
+  // GET /admin/sessions/:id/details
+  if (method === "GET" && segments[0] === "sessions" && segments[2] === "details") {
+    const sessionId = segments[1];
+
+    const { data: session, error: sessErr } = await supabase
+      .from("webinar_sessions")
+      .select("*, webinar_closers(*)")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (sessErr || !session) return json({ error: "Sessão não encontrada" }, 404);
+
+    const { data: regs } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("created_at");
+
+    const registrations = regs || [];
+    const total = registrations.length;
+    const confirmed = registrations.filter((r: Record<string, unknown>) => !r.cancelled_at).length;
+    const attended = registrations.filter((r: Record<string, unknown>) => r.attended_at).length;
+
+    const s = session as Record<string, unknown>;
+    const closer = (s.webinar_closers as Record<string, unknown> | null) || null;
+
+    return json({
+      session: {
+        id: s.id,
+        date: s.date,
+        starts_at: s.starts_at,
+        ends_at: s.ends_at,
+        status: s.status,
+        google_meet_link: s.google_meet_link,
+        closer: closer ? { id: closer.id, name: closer.name, email: closer.email, slug: closer.slug } : null,
+      },
+      stats: { total, confirmed, attended },
+      registrations,
+    });
   }
 
   // POST /admin/registrations/cta

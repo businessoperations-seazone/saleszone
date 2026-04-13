@@ -22,7 +22,7 @@ export const api = {
     request<Session[]>(`/api/sessions/available?date=${date}&closer_slug=${closerSlug}`),
   getSession: (id: string) =>
     request<Session>(`/api/sessions/${id}`),
-  register: (data: { session_id: string; name: string; email: string; phone: string }) =>
+  register: (data: { session_id: string; name: string; email: string; phone: string; pipedrive_deal_url?: string }) =>
     request<any>("/api/registrations/", { method: "POST", body: JSON.stringify(data) }),
   validateToken: (sessionId: string, token: string) =>
     request<any>(`/api/registrations/validate?session_id=${sessionId}&token=${token}`),
@@ -67,6 +67,8 @@ export const api = {
       request<any>(`/api/admin/sessions/${sessionId}/message`, { method: "POST", body: JSON.stringify({ content, presenter_email: email }), headers: { Authorization: `Bearer ${token}` } }),
     getSessionRegistrations: (token: string, sessionId: string) =>
       request<Registration[]>(`/api/admin/sessions/${sessionId}/registrations`, { headers: { Authorization: `Bearer ${token}` } }),
+    getSessionDetails: (token: string, sessionId: string) =>
+      request<any>(`/api/admin/sessions/${sessionId}/details`, { headers: { Authorization: `Bearer ${token}` } }),
     exportCSV: (_token: string, sessionId?: string) => {
       const params = sessionId ? `?session_id=${sessionId}` : '';
       return `${BASE}/api/admin/registrations/export${params}`;  // Returns URL for download
