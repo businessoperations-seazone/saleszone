@@ -625,7 +625,12 @@ async function handleSessions(method: string, segments: string[], req: Request) 
       for (const sl of slots || []) slotsMap[sl.id as string] = sl;
     }
 
-    const result = (sessions || []).map((session: Record<string, unknown>) => {
+    // Filter out sessions that have already started (with 15-min buffer)
+    const now = new Date();
+    const cutoff = new Date(now.getTime() + 15 * 60 * 1000);
+    const futureSessions = (sessions || []).filter((s: Record<string, unknown>) => new Date(s.starts_at as string) > cutoff);
+
+    const result = futureSessions.map((session: Record<string, unknown>) => {
       const slot = slotsMap[session.slot_id as string] || {};
       const maxParticipants = (slot.max_participants ?? session.max_participants ?? 0) as number;
       const registrationsCount = (session.registrations_count ?? 0) as number;
