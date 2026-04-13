@@ -1,5 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// IMPORTANT: The Google Service Account must have the Gmail send scope authorized
+// in Google Workspace Admin Console (Security > API Controls > Domain-wide Delegation).
+// Required scope: https://www.googleapis.com/auth/gmail.send
+// The SA already has calendar.events.readonly — add gmail.send alongside it.
+const FRONTEND_URL = "https://frontend-nine-ivory-62.vercel.app";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -29,6 +35,200 @@ function getSupabase() {
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
+}
+
+// ── Gmail helpers ─────────────────────────────────────────────────────────────
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem
+    .replace(/-----BEGIN.*?-----/g, "")
+    .replace(/-----END.*?-----/g, "")
+    .replace(/\s/g, "");
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(pem),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+}
+
+function base64url(data: Uint8Array | ArrayBuffer): string {
+  const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function getGmailAccessToken(sa: Record<string, string>, impersonate: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: sa.client_email,
+    sub: impersonate,
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const enc = (obj: unknown) =>
+    btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const unsigned = `${enc(header)}.${enc(claim)}`;
+  const key = await importPrivateKey(sa.private_key);
+  const sig = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    new TextEncoder().encode(unsigned)
+  );
+  const jwt = `${unsigned}.${base64url(sig)}`;
+
+  const resp = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+  const tokenData = await resp.json();
+  if (!tokenData.access_token) throw new Error(`Gmail OAuth error: ${JSON.stringify(tokenData)}`);
+  return tokenData.access_token;
+}
+
+async function sendEmail(impersonate: string, to: string, subject: string, html: string): Promise<void> {
+  const supabase = getSupabase();
+  const { data: saJson } = await supabase.rpc("vault_read_secret", { secret_name: "GOOGLE_SERVICE_ACCOUNT" });
+  if (!saJson) throw new Error("GOOGLE_SERVICE_ACCOUNT not found in vault");
+  const sa = JSON.parse(saJson.trim());
+
+  const token = await getGmailAccessToken(sa, impersonate);
+
+  const message = [
+    `From: ${impersonate}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    `MIME-Version: 1.0`,
+    `Content-Type: text/html; charset=utf-8`,
+    ``,
+    html,
+  ].join("\r\n");
+
+  const raw = btoa(unescape(encodeURIComponent(message)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  const resp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ raw }),
+  });
+  if (!resp.ok) {
+    const err = await resp.text();
+    throw new Error(`Gmail API error: ${resp.status} ${err}`);
+  }
+}
+
+function buildConfirmationEmail(
+  leadName: string,
+  closerName: string,
+  sessionStartsAt: string,
+  roomUrl: string
+): string {
+  // Format date in pt-BR, BRT timezone
+  const dt = new Date(sessionStartsAt);
+  const dateStr = dt.toLocaleDateString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+  const timeStr = dt.toLocaleTimeString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const firstName = leadName.split(" ")[0];
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:32px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
+          <!-- Header -->
+          <tr>
+            <td style="background:#0f172a;padding:28px 40px;text-align:center;">
+              <h1 style="color:#ffffff;font-size:22px;margin:0;letter-spacing:0.5px;">Seazone Investimentos</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 32px;color:#1e293b;">
+              <p style="font-size:18px;font-weight:bold;margin:0 0 16px;">Olá, ${firstName}! 👋</p>
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Seu agendamento está confirmado! Estamos animados em recebê-lo na nossa apresentação.
+              </p>
+              <!-- Info box -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:4px;margin-bottom:28px;">
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 8px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Data e horário</p>
+                    <p style="margin:0;font-size:16px;font-weight:bold;color:#0f172a;text-transform:capitalize;">${dateStr} às ${timeStr} (BRT)</p>
+                  </td>
+                </tr>
+              </table>
+              <!-- CTA -->
+              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
+                Clique no botão abaixo para acessar a sala no momento da apresentação:
+              </p>
+              <table cellpadding="0" cellspacing="0" style="margin:0 auto 32px;">
+                <tr>
+                  <td style="background:#0ea5e9;border-radius:6px;">
+                    <a href="${roomUrl}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none;">Acessar a sala</a>
+                  </td>
+                </tr>
+              </table>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 8px;">
+                Você também receberá um lembrete automático <strong>1 hora antes</strong> da sessão começar.
+              </p>
+              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 32px;">
+                Qualquer dúvida, é só responder a este e-mail.
+              </p>
+              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 24px;">
+              <p style="font-size:14px;color:#1e293b;margin:0;">
+                Abraço,<br>
+                <strong>${closerName}</strong><br>
+                <span style="color:#64748b;">Seazone Investimentos</span>
+              </p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;">
+                © ${new Date().getFullYear()} Seazone Investimentos · Este é um e-mail automático, não responda caso não reconheça este agendamento.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }
 
 async function requireAdmin(req: Request): Promise<Record<string, unknown>> {
@@ -357,8 +557,20 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     if (!session) return json({ error: "Sessão não encontrada" }, 404);
     if ((session as Record<string, unknown>).status === "cancelled") return json({ error: "Sessão cancelada" }, 409);
 
-    // Check capacity
     const s = session as Record<string, unknown>;
+
+    // Fetch closer (best-effort, used for confirmation email)
+    let closer: Record<string, unknown> | null = null;
+    if (s.closer_id) {
+      const { data: closerData } = await supabase
+        .from("webinar_closers")
+        .select("*")
+        .eq("id", s.closer_id)
+        .maybeSingle();
+      closer = (closerData as Record<string, unknown>) || null;
+    }
+
+    // Check capacity
     let maxParticipants = (s.max_participants ?? 0) as number;
     if (s.slot_id) {
       const { data: slot } = await supabase.from("webinar_slots").select("max_participants").eq("id", s.slot_id).maybeSingle();
@@ -382,7 +594,20 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     }).select().single();
     if (error) return json({ error: error.message }, 500);
 
-    const roomUrl = `/webinar/sala/${sessionId}?token=${reg.access_token}`;
+    const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${reg.access_token}`;
+
+    // Send confirmation email — best-effort (do not fail registration if email fails)
+    try {
+      const senderEmail = (closer?.email as string) || "gabriela.lemos@seazone.com.br";
+      const senderName = (closer?.name as string) || "Gabriela Lemos";
+      const startsAt = (s.starts_at as string) || new Date().toISOString();
+      const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl);
+      await sendEmail(senderEmail, data.email as string, "Seu agendamento na Seazone está confirmado!", htmlBody);
+      console.log(`[webinar-api] Confirmation email sent to ${data.email}`);
+    } catch (emailErr) {
+      console.error("[webinar-api] Failed to send confirmation email:", emailErr);
+    }
+
     return json({ access_token: reg.access_token, room_url: roomUrl, registration: reg }, 201);
   }
 
