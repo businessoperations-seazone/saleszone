@@ -450,15 +450,18 @@ function SobreTab() {
 
 export default function AuditCTWPPPage() {
   const [tab, setTab]         = useState<"leads" | "sobre">("leads")
-  const [date, setDate]       = useState(offsetKey(-1))
+  const [date, setDate]       = useState(todayKey())
   const [data, setData]       = useState<AuditCTWPPDay | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState("")
   async function fetchData(d: string) {
     setLoading(true); setError(""); setData(null)
     try {
-      const res = await fetch(`/api/growth/audit-ctwpp/results?date=${d}`)
-      if (res.status === 404) setError("Audit não encontrado. Rode manualmente ou aguarde o cron.")
+      // O cron de cada dia analisa os leads do dia ANTERIOR.
+      // "Hoje" no DatePicker = o cron que rodou hoje = leads de ontem.
+      const blobDate = d === "all" ? "all" : offsetKeyFrom(d, -1)
+      const res = await fetch(`/api/growth/audit-ctwpp/results?date=${blobDate}`)
+      if (res.status === 404) setError("Audit não encontrado. Aguarde o cron de amanhã.")
       else if (!res.ok)      setError("Erro ao carregar dados.")
       else                   setData(await res.json())
     } catch { setError("Erro de rede.") }
