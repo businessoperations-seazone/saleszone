@@ -1,10 +1,5 @@
 import { useState, useEffect } from "react";
-import { useOutletContext } from "react-router-dom";
 import { api } from "../../lib/api";
-
-interface AdminContext {
-  token: string;
-}
 
 interface DashboardData {
   sessions_today: number;
@@ -31,18 +26,16 @@ function StatCard({ label, value, color }: StatCardProps) {
 }
 
 export default function Dashboard() {
-  const { token } = useOutletContext<AdminContext>();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    api.admin.getDashboard(token)
+    api.admin.getDashboard()
       .then((d) => setData(d))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, []);
 
   return (
     <div className="p-6">

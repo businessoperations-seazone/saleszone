@@ -1,11 +1,6 @@
 import { useState, useEffect } from "react";
-import { useOutletContext } from "react-router-dom";
 import type { Registration, Session } from "../../lib/types";
 import { api } from "../../lib/api";
-
-interface AdminContext {
-  token: string;
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return "—";
@@ -19,7 +14,6 @@ function formatDateTime(iso: string | null): string {
 }
 
 export default function RegistrationsPage() {
-  const { token } = useOutletContext<AdminContext>();
   const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,25 +21,23 @@ export default function RegistrationsPage() {
   const [filterSessionId, setFilterSessionId] = useState("");
 
   useEffect(() => {
-    if (!token) return;
     // Load sessions for filter dropdown
-    api.admin.getSessions(token)
+    api.admin.getSessions()
       .then(setSessions)
       .catch(() => {});
-  }, [token]);
+  }, []);
 
   useEffect(() => {
-    if (!token) return;
     setLoading(true);
 
     const loadRegs = async () => {
       try {
         if (filterSessionId) {
-          const data = await api.admin.getSessionRegistrations(token, filterSessionId);
+          const data = await api.admin.getSessionRegistrations(filterSessionId);
           setRegistrations(data);
         } else {
           // Load all: fetch from a general endpoint (fallback to empty if unsupported)
-          const data = await api.admin.getSessionRegistrations(token, "all").catch(() => []);
+          const data = await api.admin.getSessionRegistrations("all").catch(() => []);
           setRegistrations(data);
         }
       } catch (e: unknown) {
@@ -56,10 +48,10 @@ export default function RegistrationsPage() {
     };
 
     loadRegs();
-  }, [token, filterSessionId]);
+  }, [filterSessionId]);
 
   function handleExportCSV() {
-    const url = api.admin.exportCSV(token, filterSessionId || undefined);
+    const url = api.admin.exportCSV(filterSessionId || undefined);
     window.open(url, "_blank");
   }
 

@@ -1,10 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useParams, useOutletContext, Link } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { api } from "../../lib/api";
-
-interface AdminContext {
-  token: string;
-}
 
 interface SessionInfo {
   id: string;
@@ -121,7 +117,6 @@ type SortDir = "asc" | "desc";
 
 export default function SessionRegistrations() {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const { token } = useOutletContext<AdminContext>();
   const [data, setData] = useState<DetailsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,18 +125,18 @@ export default function SessionRegistrations() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   const load = useCallback(async () => {
-    if (!sessionId || !token) return;
+    if (!sessionId) return;
     setLoading(true);
     setError(null);
     try {
-      const result = await api.admin.getSessionDetails(token, sessionId);
+      const result = await api.admin.getSessionDetails(sessionId);
       setData(result);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao carregar inscritos");
     } finally {
       setLoading(false);
     }
-  }, [sessionId, token]);
+  }, [sessionId]);
 
   useEffect(() => {
     load();
@@ -207,7 +202,7 @@ export default function SessionRegistrations() {
   const convertedCount = registrations.filter((r) => r.converted && !r.cancelled_at).length;
   const cancelledCount = registrations.filter((r) => !!r.cancelled_at).length;
 
-  const exportUrl = sessionId ? api.admin.exportCSV(token, sessionId) : null;
+  const exportUrl = sessionId ? api.admin.exportCSV(sessionId) : null;
 
   const sorted = getSortedRegistrations(registrations);
 

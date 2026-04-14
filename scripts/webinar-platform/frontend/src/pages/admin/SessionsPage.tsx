@@ -1,11 +1,7 @@
 import { useState, useEffect } from "react";
-import { useOutletContext, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import type { Session, Closer } from "../../lib/types";
 import { api } from "../../lib/api";
-
-interface AdminContext {
-  token: string;
-}
 
 const STATUS_LABELS: Record<Session["status"], string> = {
   scheduled: "Agendada",
@@ -32,7 +28,6 @@ function formatTime(iso: string) {
 }
 
 export default function SessionsPage() {
-  const { token } = useOutletContext<AdminContext>();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [closers, setClosers] = useState<Closer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +45,7 @@ export default function SessionsPage() {
       if (filterDateFrom) params.set("date_from", filterDateFrom);
       if (filterDateTo) params.set("date_to", filterDateTo);
       if (filterCloserId) params.set("closer_id", filterCloserId);
-      const data = await api.admin.getSessions(token, params.toString());
+      const data = await api.admin.getSessions(params.toString());
       setSessions(data);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao carregar sessões");
@@ -66,14 +61,14 @@ export default function SessionsPage() {
   }, []);
 
   useEffect(() => {
-    if (token) load();
-  }, [token]);
+    load();
+  }, []);
 
   async function handleCancel(id: string) {
     const reason = prompt("Motivo do cancelamento (opcional):");
     if (reason === null) return; // user pressed Cancel on prompt
     try {
-      const updated = await api.admin.updateSessionStatus(token, id, "cancelled", reason || undefined);
+      const updated = await api.admin.updateSessionStatus(id, "cancelled", reason || undefined);
       setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao cancelar sessão");

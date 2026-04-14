@@ -1,11 +1,6 @@
 import { useState, useEffect } from "react";
-import { useOutletContext } from "react-router-dom";
 import type { Slot, Closer } from "../../lib/types";
 import { api } from "../../lib/api";
-
-interface AdminContext {
-  token: string;
-}
 
 const DAY_NAMES = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
@@ -20,7 +15,6 @@ const EMPTY_FORM: Partial<Slot> & { closer_id?: string } = {
 };
 
 export default function SlotsPage() {
-  const { token } = useOutletContext<AdminContext>();
   const [slots, setSlots] = useState<Slot[]>([]);
   const [closers, setClosers] = useState<Closer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +28,7 @@ export default function SlotsPage() {
     setLoading(true);
     try {
       const [slotsData, closersData] = await Promise.all([
-        api.admin.getSlots(token),
+        api.admin.getSlots(),
         api.admin.getClosers(),
       ]);
       setSlots(slotsData);
@@ -47,8 +41,8 @@ export default function SlotsPage() {
   }
 
   useEffect(() => {
-    if (token) load();
-  }, [token]);
+    load();
+  }, []);
 
   function startNew() {
     setEditingId(null);
@@ -80,10 +74,10 @@ export default function SlotsPage() {
     setSaving(true);
     try {
       if (editingId) {
-        const updated = await api.admin.updateSlot(token, editingId, form);
+        const updated = await api.admin.updateSlot(editingId, form);
         setSlots((prev) => prev.map((s) => (s.id === editingId ? updated : s)));
       } else {
-        const created = await api.admin.createSlot(token, form);
+        const created = await api.admin.createSlot(form);
         setSlots((prev) => [...prev, created]);
       }
       cancelForm();
@@ -97,7 +91,7 @@ export default function SlotsPage() {
   async function handleDelete(id: string) {
     if (!confirm("Tem certeza que deseja excluir este horário?")) return;
     try {
-      await api.admin.deleteSlot(token, id);
+      await api.admin.deleteSlot(id);
       setSlots((prev) => prev.filter((s) => s.id !== id));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao excluir horário");
@@ -106,7 +100,7 @@ export default function SlotsPage() {
 
   async function handleToggleActive(slot: Slot) {
     try {
-      const updated = await api.admin.updateSlot(token, slot.id, { is_active: !slot.is_active });
+      const updated = await api.admin.updateSlot(slot.id, { is_active: !slot.is_active });
       setSlots((prev) => prev.map((s) => (s.id === slot.id ? updated : s)));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao atualizar horário");
