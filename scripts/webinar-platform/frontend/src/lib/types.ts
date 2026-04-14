@@ -27,6 +27,9 @@ export interface Session {
   google_meet_link: string | null;
   status: "scheduled" | "live" | "ended" | "cancelled";
   cta_active: boolean;
+  closer_id?: string;
+  closer_slug?: string;
+  closer_name?: string;
   registration_count?: number;
   max_participants?: number;
   available?: number;

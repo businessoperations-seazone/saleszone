@@ -173,7 +173,7 @@ export default function WaitingRoom() {
               Esta apresentação foi cancelada. Você pode agendar um novo horário.
             </p>
             <a
-              href="/webinar"
+              href={session?.closer_slug ? `/${session.closer_slug}` : "/"}
               className="inline-block bg-[#0066CC] text-white font-semibold py-3 px-6 rounded-xl hover:bg-blue-700 transition-colors"
             >
               Reagendar apresentação
@@ -277,7 +277,7 @@ export default function WaitingRoom() {
             {/* Reagendar link */}
             <div className="pt-1">
               <a
-                href="/webinar"
+                href={session?.closer_slug ? `/${session.closer_slug}` : "/"}
                 className="inline-flex items-center gap-1 text-sm text-[#0066CC] border border-[#0066CC] rounded-lg px-4 py-2 hover:bg-blue-50 transition-colors font-medium"
               >
                 Não vai participar?{" "}
