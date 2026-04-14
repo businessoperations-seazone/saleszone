@@ -413,7 +413,7 @@ def main():
     log(f"Sync Fireflies — DAYS_BACK={DAYS_BACK}, DRY_RUN={DRY_RUN}")
     log("=" * 60)
 
-    # Validar env vars
+    # Validar env vars (ANTHROPIC_API_KEY e opcional — sem ela, pula avaliacao)
     missing = []
     if not FIREFLIES_KEY:
         missing.append("FIREFLIES_API_KEY")
@@ -421,11 +421,13 @@ def main():
         missing.append("SUPABASE_URL")
     if not SUPABASE_KEY:
         missing.append("SUPABASE_SERVICE_ROLE_KEY")
-    if not ANTHROPIC_KEY:
-        missing.append("ANTHROPIC_API_KEY")
     if missing:
         log(f"ERRO: Variaveis faltando: {', '.join(missing)}")
         sys.exit(1)
+
+    skip_eval = not ANTHROPIC_KEY
+    if skip_eval:
+        log("AVISO: ANTHROPIC_API_KEY ausente — sync sem avaliacao Claude")
 
     # 1. Buscar transcripts do Fireflies
     log("\n1. Buscando transcripts do Fireflies...")
@@ -483,9 +485,13 @@ def main():
                 success_count += 1
             continue
 
-        # 4c. Avaliar com Claude
-        log(f"    Avaliando ({len(transcript_text)} chars)...")
-        avaliacao = evaluate_transcript(transcript_text, closer, emp)
+        # 4c. Avaliar com Claude (se ANTHROPIC_API_KEY disponivel)
+        avaliacao = None
+        if skip_eval:
+            log(f"    Salvando transcript sem avaliacao ({len(transcript_text)} chars)")
+        else:
+            log(f"    Avaliando ({len(transcript_text)} chars)...")
+            avaliacao = evaluate_transcript(transcript_text, closer, emp)
 
         if avaliacao:
             diagnostico = generate_diagnostico(avaliacao)
@@ -501,7 +507,8 @@ def main():
                 diagnostico=diagnostico,
             )
         else:
-            log("    Avaliacao falhou — salvando transcript sem avaliacao")
+            if not skip_eval:
+                log("    Avaliacao falhou — salvando transcript sem avaliacao")
             ok = patch_event(
                 event_id,
                 fireflies_id=fireflies_id,

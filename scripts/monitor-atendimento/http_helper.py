@@ -55,7 +55,10 @@ def http_post(url, headers=None, body=None):
             for k, v in merged.items():
                 req.add_header(k, v)
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-                return json.loads(resp.read())
+                body_bytes = resp.read()
+                if not body_bytes:
+                    return None
+                return json.loads(body_bytes)
         except Exception as e:
             wait = RETRY_BASE_BACKOFF ** (attempt + 1)
             log.warning("POST %s falhou (tentativa %d/%d): %s — retry em %ds",
