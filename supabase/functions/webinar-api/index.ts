@@ -133,7 +133,8 @@ function buildConfirmationEmail(
   leadName: string,
   closerName: string,
   sessionStartsAt: string,
-  roomUrl: string
+  roomUrl: string,
+  preSellerName?: string | null,
 ): string {
   const dt = new Date(sessionStartsAt);
   const dateStr = dt.toLocaleDateString("pt-BR", {
@@ -214,7 +215,7 @@ function buildConfirmationEmail(
               </tr></table>
             </td></tr>
             <!-- Presenter -->
-            <tr><td style="padding:0 28px 20px;">
+            <tr><td style="padding:0 28px ${preSellerName ? '12px' : '20px'};">
               <table cellpadding="0" cellspacing="0"><tr>
                 <td style="vertical-align:top;padding-right:12px;">
                   <span style="font-size:18px;">&#128100;</span>
@@ -224,7 +225,19 @@ function buildConfirmationEmail(
                   <p style="margin:2px 0 0;font-size:15px;font-weight:600;color:#1e293b;">${closerName}</p>
                 </td>
               </tr></table>
-            </td></tr>
+            </td></tr>${preSellerName ? `
+            <!-- Pre-seller -->
+            <tr><td style="padding:0 28px 20px;">
+              <table cellpadding="0" cellspacing="0"><tr>
+                <td style="vertical-align:top;padding-right:12px;">
+                  <span style="font-size:18px;">&#128172;</span>
+                </td>
+                <td>
+                  <p style="margin:0;font-size:11px;font-weight:bold;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Pré-vendedora</p>
+                  <p style="margin:2px 0 0;font-size:15px;font-weight:600;color:#1e293b;">${preSellerName}</p>
+                </td>
+              </tr></table>
+            </td></tr>` : ''}
             <tr><td style="padding:0 28px;"><div style="border-top:1px solid #f1f5f9;margin:0 0 20px;"></div></td></tr>
             <!-- CTA -->
             <tr><td align="center" style="padding:0 28px 28px;">
@@ -990,7 +1003,7 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     try {
       const startsAt = (s.starts_at as string) || new Date().toISOString();
       const senderName = (closer.name as string) || "Seazone";
-      const html = buildConfirmationEmail(name, senderName, startsAt, roomUrl);
+      const html = buildConfirmationEmail(name, senderName, startsAt, roomUrl, null);
       await sendEmail(senderName, email, "Seu agendamento na Seazone está confirmado!", html);
     } catch (err) {
       console.error("[webinar-api] email failed (external reg):", err);
@@ -1042,7 +1055,8 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
         if (cl) closerName = (cl as Record<string, unknown>).name as string;
       }
       const startsAt = (newSession as Record<string, unknown>)?.starts_at as string || new Date().toISOString();
-      const htmlBody = buildConfirmationEmail(old.name as string, closerName, startsAt, roomUrl);
+      const preSellerName = await pipedriveGetPreSellerName(old.pipedrive_deal_url as string | null);
+      const htmlBody = buildConfirmationEmail(old.name as string, closerName, startsAt, roomUrl, preSellerName);
       await sendEmail(closerName, old.email as string, "Seu agendamento na Seazone foi reagendado!", htmlBody);
       console.log(`[webinar-api] Reschedule confirmation email sent to ${old.email}`);
     } catch (emailErr) {
@@ -1140,7 +1154,8 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     try {
       const senderName = (closer?.name as string) || "Gabriela Lemos";
       const startsAt = (s.starts_at as string) || new Date().toISOString();
-      const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl);
+      const preSellerName = await pipedriveGetPreSellerName(data.pipedrive_deal_url as string | null);
+      const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl, preSellerName);
       await sendEmail(senderName, data.email as string, "Seu agendamento na Seazone está confirmado!", htmlBody);
       console.log(`[webinar-api] Confirmation email sent to ${data.email}`);
     } catch (emailErr) {
@@ -2012,6 +2027,7 @@ ${actionItems ? `<hr/><p><strong>Ações acordadas:</strong></p><p>${htmlActions
 const PIPEDRIVE_DOMAIN = "seazone-fd92b9";
 const SZS_PIPELINE_ID = 14;
 const SZS_STAGE_REUNIAO_REALIZADA = 151;
+const PRE_SELLER_FIELD_KEY = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
 
 function extractDealId(dealUrl: string | null | undefined): number | null {
   if (!dealUrl) return null;
@@ -2048,6 +2064,26 @@ async function pipedriveMoveDealStage(dealId: number): Promise<{ ok: boolean; er
 }
 
 const SZS_STAGE_AGENDADO = 73;
+
+async function pipedriveGetPreSellerName(dealUrl: string | null | undefined): Promise<string | null> {
+  const dealId = extractDealId(dealUrl);
+  if (!dealId) return null;
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return null;
+  try {
+    const resp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const preSellerUserId = data?.data?.[PRE_SELLER_FIELD_KEY];
+    if (!preSellerUserId) return null;
+    const userResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/users/${preSellerUserId}?api_token=${token}`);
+    if (!userResp.ok) return null;
+    const userData = await userResp.json();
+    return userData?.data?.name || null;
+  } catch {
+    return null;
+  }
+}
 
 async function pipedriveFindUserByEmail(email: string): Promise<number | null> {
   const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
