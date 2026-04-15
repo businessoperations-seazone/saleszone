@@ -137,14 +137,15 @@ function evaluateStatus(
   }
 
   if (r.dias_ativos < cp.opp) {
-    const costOk = r.sql === 0 || cost_per_sql <= s.sql_meta
+    // Passou o checkpoint SQL sem nenhum MQL → PAUSAR (igual ao bloco anterior)
+    if (r.mql === 0) return "PAUSAR"
+    // Avalia custo: se tem SQL usa custo/SQL; se sql=0, usa custo/MQL como proxy
+    const costOk = r.sql > 0 ? cost_per_sql <= s.sql_meta : cost_per_mql <= s.mql_meta
     const rateOk = r.sql < 3 || rate_sql_opp >= s.taxa_sql_opp
+    const mqlAlsoHigh = isFinite(cost_per_mql) && cost_per_mql > s.mql_meta
     if (costOk && rateOk) return "MANTER"
     if (!costOk && !rateOk) return "PAUSAR"
-    if (!costOk && rateOk) {
-      const mqlAlsoHigh = isFinite(cost_per_mql) && cost_per_mql > s.mql_meta
-      return mqlAlsoHigh ? "PAUSAR" : "MONITORAR"
-    }
+    if (!costOk && rateOk) return mqlAlsoHigh ? "PAUSAR" : "MONITORAR"
     return "MONITORAR"
   }
 
