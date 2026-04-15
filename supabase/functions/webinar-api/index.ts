@@ -1055,10 +1055,14 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
         if (cl) closerName = (cl as Record<string, unknown>).name as string;
       }
       const startsAt = (newSession as Record<string, unknown>)?.starts_at as string || new Date().toISOString();
-      const preSellerName = await pipedriveGetPreSellerName(old.pipedrive_deal_url as string | null);
-      const htmlBody = buildConfirmationEmail(old.name as string, closerName, startsAt, roomUrl, preSellerName);
+      const preSeller = await pipedriveGetPreSeller(old.pipedrive_deal_url as string | null);
+      const htmlBody = buildConfirmationEmail(old.name as string, closerName, startsAt, roomUrl, preSeller?.name);
       await sendEmail(closerName, old.email as string, "Seu agendamento na Seazone foi reagendado!", htmlBody);
       console.log(`[webinar-api] Reschedule confirmation email sent to ${old.email}`);
+      if (preSeller?.email) {
+        await sendEmail(closerName, preSeller.email, `[Webinar] ${old.name} reagendou`, htmlBody);
+        console.log(`[webinar-api] Pre-seller reschedule copy sent to ${preSeller.email}`);
+      }
     } catch (emailErr) {
       console.error("[webinar-api] Failed to send reschedule email:", emailErr);
     }
@@ -1154,10 +1158,16 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     try {
       const senderName = (closer?.name as string) || "Gabriela Lemos";
       const startsAt = (s.starts_at as string) || new Date().toISOString();
-      const preSellerName = await pipedriveGetPreSellerName(data.pipedrive_deal_url as string | null);
-      const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl, preSellerName);
-      await sendEmail(senderName, data.email as string, "Seu agendamento na Seazone está confirmado!", htmlBody);
+      const preSeller = await pipedriveGetPreSeller(data.pipedrive_deal_url as string | null);
+      const htmlBody = buildConfirmationEmail(data.name as string, senderName, startsAt, roomUrl, preSeller?.name);
+      const subject = "Seu agendamento na Seazone está confirmado!";
+      await sendEmail(senderName, data.email as string, subject, htmlBody);
       console.log(`[webinar-api] Confirmation email sent to ${data.email}`);
+      // Send copy to pre-seller
+      if (preSeller?.email) {
+        await sendEmail(senderName, preSeller.email, `[Webinar] ${data.name} confirmou agendamento`, htmlBody);
+        console.log(`[webinar-api] Pre-seller copy sent to ${preSeller.email}`);
+      }
     } catch (emailErr) {
       console.error("[webinar-api] Failed to send confirmation email:", emailErr);
     }
@@ -1298,6 +1308,58 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
     const { data: created, error } = await supabase.from("webinar_messages").insert(message).select().single();
     if (error) return json({ error: error.message }, 500);
     return json(created, 201);
+  }
+
+  // POST /admin/sessions/:id/mark-no-shows (bulk mark no-shows + move Pipedrive deals)
+  if (method === "POST" && segments[0] === "sessions" && segments[2] === "mark-no-shows") {
+    const sessionId = segments[1];
+
+    // Verify session exists and is ended
+    const { data: sess } = await supabase
+      .from("webinar_sessions")
+      .select("id, status")
+      .eq("id", sessionId)
+      .maybeSingle();
+    if (!sess) return json({ error: "Sessão não encontrada" }, 404);
+
+    // Get all registrations that are "Confirmado" (no attended_at, no cancelled_at, no no_show_at)
+    const { data: regs } = await supabase
+      .from("webinar_registrations")
+      .select("id, name, pipedrive_deal_url")
+      .eq("session_id", sessionId)
+      .is("attended_at", null)
+      .is("cancelled_at", null)
+      .is("no_show_at", null);
+
+    if (!regs || regs.length === 0) {
+      return json({ ok: true, marked: 0, results: [] });
+    }
+
+    const now = new Date().toISOString();
+    const results: { id: string; name: string; db_ok: boolean; pipedrive?: { ok: boolean; moved?: boolean; error?: string } }[] = [];
+
+    for (const reg of regs) {
+      const r = reg as Record<string, unknown>;
+      // Update no_show_at in DB
+      const { error: dbErr } = await supabase
+        .from("webinar_registrations")
+        .update({ no_show_at: now })
+        .eq("id", r.id);
+
+      const entry: typeof results[0] = { id: r.id as string, name: r.name as string, db_ok: !dbErr };
+
+      // Move deal to No Show stage in Pipedrive
+      const dealId = extractDealId(r.pipedrive_deal_url as string | null);
+      if (dealId) {
+        const pdResult = await pipedriveMoveDealToNoShow(dealId);
+        entry.pipedrive = pdResult;
+        console.log(`[webinar-api] No Show: deal ${dealId} for ${r.name}:`, pdResult);
+      }
+
+      results.push(entry);
+    }
+
+    return json({ ok: true, marked: results.length, results });
   }
 
   // GET /admin/registrations (all)
@@ -2027,6 +2089,7 @@ ${actionItems ? `<hr/><p><strong>Ações acordadas:</strong></p><p>${htmlActions
 const PIPEDRIVE_DOMAIN = "seazone-fd92b9";
 const SZS_PIPELINE_ID = 14;
 const SZS_STAGE_REUNIAO_REALIZADA = 151;
+const SZS_STAGE_NO_SHOW = 342;
 const PRE_SELLER_FIELD_KEY = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
 
 function extractDealId(dealUrl: string | null | undefined): number | null {
@@ -2063,9 +2126,35 @@ async function pipedriveMoveDealStage(dealId: number): Promise<{ ok: boolean; er
   }
 }
 
+async function pipedriveMoveDealToNoShow(dealId: number): Promise<{ ok: boolean; error?: string; moved?: boolean; pipeline_id?: number }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  try {
+    const dealResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`);
+    if (!dealResp.ok) return { ok: false, error: `Fetch deal failed: ${dealResp.status}` };
+    const dealData = await dealResp.json();
+    const pipelineId = dealData?.data?.pipeline_id;
+    if (pipelineId !== SZS_PIPELINE_ID) {
+      return { ok: true, moved: false, pipeline_id: pipelineId };
+    }
+    const updateResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage_id: SZS_STAGE_NO_SHOW }),
+    });
+    if (!updateResp.ok) {
+      const err = await updateResp.text();
+      return { ok: false, error: `Update stage failed: ${updateResp.status} ${err}` };
+    }
+    return { ok: true, moved: true, pipeline_id: pipelineId };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 const SZS_STAGE_AGENDADO = 73;
 
-async function pipedriveGetPreSellerName(dealUrl: string | null | undefined): Promise<string | null> {
+async function pipedriveGetPreSeller(dealUrl: string | null | undefined): Promise<{ name: string; email: string } | null> {
   const dealId = extractDealId(dealUrl);
   if (!dealId) return null;
   const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
@@ -2079,7 +2168,10 @@ async function pipedriveGetPreSellerName(dealUrl: string | null | undefined): Pr
     const userResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/users/${preSellerUserId}?api_token=${token}`);
     if (!userResp.ok) return null;
     const userData = await userResp.json();
-    return userData?.data?.name || null;
+    const name = userData?.data?.name as string | undefined;
+    const email = userData?.data?.email as string | undefined;
+    if (!name || !email) return null;
+    return { name, email };
   } catch {
     return null;
   }
