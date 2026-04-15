@@ -3,9 +3,10 @@ import type { Session, Message, Slot, Registration, Closer } from "./types";
 const BASE = import.meta.env.VITE_API_URL || "https://ljsvkaidlzflewnimupz.supabase.co/functions/v1/webinar-api";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const { headers: extraHeaders, ...rest } = options || {};
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
+    ...rest,
+    headers: { "Content-Type": "application/json", ...extraHeaders },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -22,8 +23,36 @@ export const api = {
     request<Session[]>(`/api/sessions/available?date=${date}&closer_slug=${closerSlug}`),
   getSession: (id: string) =>
     request<Session>(`/api/sessions/${id}`),
-  register: (data: { session_id: string; name: string; email: string; phone: string; pipedrive_deal_url?: string }) =>
-    request<any>("/api/registrations/", { method: "POST", body: JSON.stringify(data) }),
+  register: async (data: { session_id: string; name: string; email: string; phone: string; pipedrive_deal_url?: string; cidade?: string; tipo_imovel?: string }) => {
+    const BASE_URL = import.meta.env.VITE_API_URL || "https://ljsvkaidlzflewnimupz.supabase.co/functions/v1/webinar-api";
+    const res = await fetch(`${BASE_URL}/api/registrations/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) {
+      if (body.has_existing) return body;
+      throw new Error(body.error || res.statusText);
+    }
+    return body;
+  },
+  reschedule: (data: { registration_id: string; new_session_id: string }) =>
+    request<any>("/api/registrations/reschedule", { method: "POST", body: JSON.stringify(data) }),
+  registerExternal: async (data: { session_id: string; name: string; email: string; phone: string; cidade: string; closer_slug: string }) => {
+    const BASE_URL = import.meta.env.VITE_API_URL || "https://ljsvkaidlzflewnimupz.supabase.co/functions/v1/webinar-api";
+    const res = await fetch(`${BASE_URL}/api/registrations/external`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok) {
+      if (body.has_existing) return body;
+      throw new Error(body.error || res.statusText);
+    }
+    return body;
+  },
   lookupDeal: (dealUrl: string) =>
     request<{ deal_id: string; deal_url: string; deal_title: string; organization: string; name: string; email: string; phone: string }>(
       "/api/pipedrive/lookup",
@@ -72,6 +101,15 @@ export const api = {
       request<any>(`/admin/sessions/${sessionId}/message`, { method: "POST", body: JSON.stringify({ content, presenter_email: email }) }),
     getSessionRegistrations: (sessionId: string) =>
       request<Registration[]>(`/admin/sessions/${sessionId}/registrations`),
+    getAllRegistrations: () =>
+      request<Registration[]>("/admin/registrations"),
+    updateRegistration: (id: string, data: Partial<Registration>) =>
+      request<Registration>(`/admin/registrations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    syncTranscript: (id: string) =>
+      request<{ ok: boolean; transcript_id?: string; transcript_title?: string; pipedrive?: { ok: boolean; note_id?: number; error?: string }; error?: string }>(
+        `/admin/registrations/${id}/sync-transcript`,
+        { method: "POST" }
+      ),
     getSessionDetails: (sessionId: string) =>
       request<any>(`/admin/sessions/${sessionId}/details`),
     exportCSV: (sessionId?: string) => {

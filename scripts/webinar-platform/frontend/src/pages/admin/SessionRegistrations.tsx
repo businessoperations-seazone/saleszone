@@ -24,6 +24,15 @@ interface Registration {
   email: string;
   phone: string;
   pipedrive_deal_url: string | null;
+  observacoes: string | null;
+  cidade: string | null;
+  tipo_imovel: string | null;
+  is_opportunity: boolean | null;
+  opportunity_marked_at: string | null;
+  fireflies_transcript_id: string | null;
+  transcript_summary: string | null;
+  transcript_synced_at: string | null;
+  pipedrive_transcript_note_id: number | null;
   created_at: string;
   cancelled_at: string | null;
   attended_at: string | null;
@@ -123,6 +132,10 @@ export default function SessionRegistrations() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("created_at");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [editingObs, setEditingObs] = useState<Record<string, string>>({});
+  const [savingObs, setSavingObs] = useState<string | null>(null);
+  const [savingOpp, setSavingOpp] = useState<string | null>(null);
+  const [syncingTranscript, setSyncingTranscript] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -141,6 +154,69 @@ export default function SessionRegistrations() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function handleSaveObs(regId: string) {
+    const obs = editingObs[regId] ?? "";
+    setSavingObs(regId);
+    try {
+      await api.admin.updateRegistration(regId, { observacoes: obs });
+      // Update local state
+      setData((prev) => prev ? {
+        ...prev,
+        registrations: prev.registrations.map((r) => r.id === regId ? { ...r, observacoes: obs } : r),
+      } : prev);
+      setEditingObs((prev) => { const n = { ...prev }; delete n[regId]; return n; });
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao salvar observações");
+    } finally {
+      setSavingObs(null);
+    }
+  }
+
+  async function handleSyncTranscript(regId: string) {
+    setSyncingTranscript(regId);
+    setError(null);
+    try {
+      const result = await api.admin.syncTranscript(regId);
+      if (result.ok) {
+        alert(`✅ Resumo da reunião "${result.transcript_title}" enviado para o Pipedrive (nota ${result.pipedrive?.note_id || "—"}).`);
+        await load();
+      } else {
+        alert(`⚠️ ${result.error}`);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao sincronizar transcrição");
+    } finally {
+      setSyncingTranscript(null);
+    }
+  }
+
+  async function handleSetOpportunity(regId: string, value: boolean) {
+    setSavingOpp(regId);
+    setError(null);
+    try {
+      const result = await api.admin.updateRegistration(regId, { is_opportunity: value }) as Registration & { _pipedrive?: { stage_move?: { ok: boolean; moved?: boolean; pipeline_id?: number; error?: string } } };
+      setData((prev) => prev ? {
+        ...prev,
+        registrations: prev.registrations.map((r) => r.id === regId ? { ...r, is_opportunity: value, opportunity_marked_at: value ? new Date().toISOString() : r.opportunity_marked_at } : r),
+      } : prev);
+      // Show feedback about Pipedrive action
+      const pd = result._pipedrive?.stage_move;
+      if (value && pd) {
+        if (pd.moved) {
+          alert("✅ Deal movido para \"Reunião Realizada\" no Pipedrive.");
+        } else if (pd.ok && !pd.moved) {
+          alert(`ℹ️ Deal marcado como oportunidade, mas não foi movido (pipeline ${pd.pipeline_id}, esperado 14).`);
+        } else if (!pd.ok) {
+          alert(`⚠️ Marcado como oportunidade, mas erro no Pipedrive: ${pd.error}`);
+        }
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao marcar oportunidade");
+    } finally {
+      setSavingOpp(null);
+    }
+  }
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -364,6 +440,16 @@ export default function SessionRegistrations() {
                             </span>
                           </div>
                           <span className="font-medium text-gray-900">{reg.name}</span>
+                          {reg.is_opportunity === true && (
+                            <span title="Oportunidade" className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 text-green-700 border border-green-200">
+                              🎯 OPP
+                            </span>
+                          )}
+                          {reg.is_opportunity === false && (
+                            <span title="Não é oportunidade" className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500">
+                              não
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -401,7 +487,7 @@ export default function SessionRegistrations() {
                     {expandedRow === reg.id && (
                       <tr key={`${reg.id}-expanded`} className="bg-blue-50/50">
                         <td colSpan={5} className="px-4 py-4">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mb-3">
                             <div>
                               <p className="text-gray-400 font-medium mb-1">Inscrito em</p>
                               <p className="text-gray-700">{formatDateTime(reg.created_at)}</p>
@@ -430,6 +516,164 @@ export default function SessionRegistrations() {
                                   {reg.pipedrive_deal_url}
                                 </a>
                               </div>
+                            )}
+                          </div>
+                          {/* Cidade + Tipo */}
+                          <div className="mb-3 grid grid-cols-1 sm:grid-cols-2 gap-3" onClick={(e) => e.stopPropagation()}>
+                            <div>
+                              <p className="text-gray-400 font-medium mb-1 text-xs">Cidade do imóvel</p>
+                              <input
+                                type="text"
+                                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white"
+                                placeholder="—"
+                                defaultValue={reg.cidade ?? ""}
+                                onBlur={async (e) => {
+                                  const v = e.target.value.trim();
+                                  if (v === (reg.cidade ?? "")) return;
+                                  try {
+                                    await api.admin.updateRegistration(reg.id, { cidade: v });
+                                    setData((prev) => prev ? {
+                                      ...prev,
+                                      registrations: prev.registrations.map((r) => r.id === reg.id ? { ...r, cidade: v } : r),
+                                    } : prev);
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : "Erro ao salvar cidade");
+                                  }
+                                }}
+                              />
+                            </div>
+                            <div>
+                              <p className="text-gray-400 font-medium mb-1 text-xs">Tipo do imóvel</p>
+                              <select
+                                className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs bg-white"
+                                defaultValue={reg.tipo_imovel ?? ""}
+                                onChange={async (e) => {
+                                  const v = e.target.value;
+                                  if (v === (reg.tipo_imovel ?? "")) return;
+                                  try {
+                                    await api.admin.updateRegistration(reg.id, { tipo_imovel: v });
+                                    setData((prev) => prev ? {
+                                      ...prev,
+                                      registrations: prev.registrations.map((r) => r.id === reg.id ? { ...r, tipo_imovel: v } : r),
+                                    } : prev);
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : "Erro ao salvar tipo");
+                                  }
+                                }}
+                              >
+                                <option value="">— selecionar —</option>
+                                <option value="Apartamento">Apartamento</option>
+                                <option value="Casa">Casa</option>
+                                <option value="Cobertura">Cobertura</option>
+                                <option value="Terreno">Terreno</option>
+                                <option value="Comercial">Comercial</option>
+                                <option value="Outro">Outro</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Oportunidade selector */}
+                          <div className="mb-3" onClick={(e) => e.stopPropagation()}>
+                            <p className="text-gray-400 font-medium mb-1.5 text-xs">É oportunidade?</p>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSetOpportunity(reg.id, true)}
+                                disabled={savingOpp === reg.id}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 ${
+                                  reg.is_opportunity === true
+                                    ? "bg-green-600 text-white shadow-sm"
+                                    : "bg-white border border-gray-200 text-gray-700 hover:bg-green-50 hover:border-green-300"
+                                }`}
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Sim {reg.is_opportunity === true && "(move Pipedrive)"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSetOpportunity(reg.id, false)}
+                                disabled={savingOpp === reg.id}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 ${
+                                  reg.is_opportunity === false
+                                    ? "bg-gray-500 text-white shadow-sm"
+                                    : "bg-white border border-gray-200 text-gray-700 hover:bg-gray-50"
+                                }`}
+                              >
+                                Não
+                              </button>
+                              {savingOpp === reg.id && (
+                                <span className="text-gray-400 text-xs">Salvando...</span>
+                              )}
+                              {reg.is_opportunity === true && reg.opportunity_marked_at && (
+                                <span className="text-xs text-green-700 ml-1">
+                                  Marcada em {formatDateTime(reg.opportunity_marked_at)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Observações editor */}
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <p className="text-gray-400 font-medium mb-1 text-xs">Observações <span className="font-normal text-gray-400">(ao salvar, vira nota no deal do Pipedrive)</span></p>
+                            <textarea
+                              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs resize-y min-h-[60px] bg-white"
+                              placeholder="Anotações do closer (perfil, interesse, próximos passos...)"
+                              value={editingObs[reg.id] ?? reg.observacoes ?? ""}
+                              onChange={(e) => setEditingObs((p) => ({ ...p, [reg.id]: e.target.value }))}
+                              rows={3}
+                            />
+                            {(editingObs[reg.id] !== undefined && editingObs[reg.id] !== (reg.observacoes ?? "")) && (
+                              <div className="flex gap-2 mt-2">
+                                <button
+                                  onClick={() => handleSaveObs(reg.id)}
+                                  disabled={savingObs === reg.id}
+                                  className="bg-blue-600 text-white rounded-md px-3 py-1 text-xs font-semibold hover:bg-blue-700 transition-colors disabled:opacity-50"
+                                >
+                                  {savingObs === reg.id ? "Salvando..." : "Salvar"}
+                                </button>
+                                <button
+                                  onClick={() => setEditingObs((p) => { const n = { ...p }; delete n[reg.id]; return n; })}
+                                  className="border border-gray-200 text-gray-600 rounded-md px-3 py-1 text-xs hover:bg-gray-50 transition-colors"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Transcript sync */}
+                          <div className="mt-4 pt-3 border-t border-gray-200" onClick={(e) => e.stopPropagation()}>
+                            <p className="text-gray-400 font-medium mb-1 text-xs">Resumo da reunião (Fireflies → Pipedrive)</p>
+                            {reg.transcript_synced_at ? (
+                              <div className="bg-green-50 border border-green-200 rounded-lg p-2.5 text-xs">
+                                <p className="text-green-700 font-medium">
+                                  ✅ Sincronizado em {formatDateTime(reg.transcript_synced_at)}
+                                </p>
+                                {reg.transcript_summary && (
+                                  <p className="text-gray-600 mt-1 whitespace-pre-wrap line-clamp-3">{reg.transcript_summary.slice(0, 300)}...</p>
+                                )}
+                                <button
+                                  onClick={() => handleSyncTranscript(reg.id)}
+                                  disabled={syncingTranscript === reg.id}
+                                  className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium disabled:opacity-50"
+                                >
+                                  {syncingTranscript === reg.id ? "Sincronizando..." : "↻ Sincronizar novamente"}
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => handleSyncTranscript(reg.id)}
+                                disabled={syncingTranscript === reg.id || !reg.attended_at}
+                                className="inline-flex items-center gap-1.5 bg-purple-600 text-white rounded-md px-3 py-1.5 text-xs font-semibold hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={!reg.attended_at ? "Marque presença antes de buscar a transcrição" : "Busca a transcrição no Fireflies e envia o resumo como nota no Pipedrive"}
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                                </svg>
+                                {syncingTranscript === reg.id ? "Buscando..." : "Buscar e enviar resumo ao Pipedrive"}
+                              </button>
                             )}
                           </div>
                         </td>

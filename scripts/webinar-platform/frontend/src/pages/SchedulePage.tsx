@@ -39,7 +39,7 @@ interface DealInfo {
   phone: string;
 }
 
-type Step = "deal" | "calendar" | "confirm" | "confirmed";
+type Step = "deal" | "calendar" | "confirm" | "confirmed" | "reschedule";
 
 export default function SchedulePage() {
   const { closerSlug } = useParams<{ closerSlug: string }>();
@@ -63,6 +63,11 @@ export default function SchedulePage() {
   // Confirm step state
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [cidade, setCidade] = useState("");
+
+  // Reschedule state
+  const [existingReg, setExistingReg] = useState<{ existing_session_id: string; existing_registration_id: string; existing_starts_at: string | null } | null>(null);
+  const [rescheduleLoading, setRescheduleLoading] = useState(false);
 
   // Confirmed step
   const [roomUrl, setRoomUrl] = useState<string>("");
@@ -116,6 +121,10 @@ export default function SchedulePage() {
   async function handleConfirm() {
     if (!selectedSession || !dealInfo) return;
     setConfirmError(null);
+    if (!cidade.trim()) {
+      setConfirmError("Informe a cidade onde o imóvel está localizado.");
+      return;
+    }
     setConfirmLoading(true);
     try {
       const result = await api.register({
@@ -124,7 +133,23 @@ export default function SchedulePage() {
         email: dealInfo.email,
         phone: dealInfo.phone,
         pipedrive_deal_url: dealInfo.deal_url,
+        cidade: cidade.trim(),
       });
+      if (result.already_registered) {
+        const url = result.room_url || `/webinar/sala/${selectedSession.id}`;
+        setRoomUrl(url);
+        setStep("confirmed");
+        return;
+      }
+      if (result.has_existing) {
+        setExistingReg({
+          existing_session_id: result.existing_session_id,
+          existing_registration_id: result.existing_registration_id,
+          existing_starts_at: result.existing_starts_at,
+        });
+        setStep("reschedule");
+        return;
+      }
       const url = result?.room_url || `/webinar/sala/${selectedSession.id}`;
       setRoomUrl(url);
       setStep("confirmed");
@@ -132,6 +157,26 @@ export default function SchedulePage() {
       setConfirmError(err instanceof Error ? err.message : "Erro ao confirmar inscrição. Tente novamente.");
     } finally {
       setConfirmLoading(false);
+    }
+  }
+
+  async function handleReschedule() {
+    if (!selectedSession || !existingReg) return;
+    setRescheduleLoading(true);
+    setConfirmError(null);
+    try {
+      const result = await api.reschedule({
+        registration_id: existingReg.existing_registration_id,
+        new_session_id: selectedSession.id,
+      });
+      const url = result?.room_url || `/webinar/sala/${selectedSession.id}`;
+      setRoomUrl(url);
+      setStep("confirmed");
+    } catch (err: unknown) {
+      setConfirmError(err instanceof Error ? err.message : "Erro ao reagendar. Tente novamente.");
+      setStep("confirm");
+    } finally {
+      setRescheduleLoading(false);
     }
   }
 
@@ -330,6 +375,21 @@ export default function SchedulePage() {
                 </div>
               </div>
 
+              {/* Cidade do imóvel */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Cidade onde possui imóvel <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={cidade}
+                  onChange={(e) => setCidade(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
+                  placeholder="Florianópolis / SC"
+                  required
+                />
+              </div>
+
               {confirmError && (
                 <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{confirmError}</p>
               )}
@@ -358,6 +418,69 @@ export default function SchedulePage() {
                     </>
                   ) : (
                     "Confirmar agendamento"
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step: Reschedule */}
+          {step === "reschedule" && existingReg && selectedSession && (
+            <div className="bg-white rounded-2xl shadow-sm border border-amber-200 p-6 space-y-5">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <svg className="w-5 h-5 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900 mb-1">Agendamento existente</h2>
+                  <p className="text-sm text-gray-500">
+                    Você já possui um agendamento
+                    {existingReg.existing_starts_at && (
+                      <> para <span className="font-medium text-gray-700">{formatDateTime(existingReg.existing_starts_at)}</span></>
+                    )}.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 rounded-xl px-4 py-3">
+                <p className="text-xs text-blue-500 uppercase font-semibold tracking-wide mb-1">Novo horário</p>
+                <p className="text-sm font-semibold text-blue-900">{formatDateTime(selectedSession.starts_at)}</p>
+              </div>
+
+              <p className="text-sm text-gray-600">
+                Deseja cancelar o agendamento anterior e reagendar para este horário?
+              </p>
+
+              {confirmError && (
+                <p className="text-sm text-red-500 bg-red-50 rounded-xl px-4 py-3">{confirmError}</p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setStep("calendar"); setExistingReg(null); }}
+                  disabled={rescheduleLoading}
+                  className="flex-1 py-3 px-4 rounded-xl border border-gray-200 text-sm font-medium
+                    text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Voltar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReschedule}
+                  disabled={rescheduleLoading}
+                  className="flex-1 py-3 px-4 rounded-xl bg-[#0066CC] text-white text-sm font-semibold
+                    hover:bg-blue-700 transition-colors disabled:opacity-70 flex items-center justify-center gap-2"
+                >
+                  {rescheduleLoading ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Reagendando...
+                    </>
+                  ) : (
+                    "Sim, reagendar"
                   )}
                 </button>
               </div>

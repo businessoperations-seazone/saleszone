@@ -36,8 +36,7 @@ export default function RegistrationsPage() {
           const data = await api.admin.getSessionRegistrations(filterSessionId);
           setRegistrations(data);
         } else {
-          // Load all: fetch from a general endpoint (fallback to empty if unsupported)
-          const data = await api.admin.getSessionRegistrations("all").catch(() => []);
+          const data = await api.admin.getAllRegistrations();
           setRegistrations(data);
         }
       } catch (e: unknown) {
@@ -58,8 +57,8 @@ export default function RegistrationsPage() {
   function getSessionLabel(sessionId: string): string {
     const session = sessions.find((s) => s.id === sessionId);
     if (!session) return sessionId.slice(0, 8) + "...";
-    const d = new Date(session.date);
-    return `${d.toLocaleDateString("pt-BR")} ${new Date(session.starts_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+    const [y, m, d] = session.date.split("-");
+    return `${d}/${m}/${y} ${new Date(session.starts_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
   }
 
   return (
@@ -124,8 +123,10 @@ export default function RegistrationsPage() {
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Nome</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Telefone</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Deal</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Sessão</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Data</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Inscrito em</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Obs.</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Presente</th>
                   <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Convertido</th>
                 </tr>
@@ -134,10 +135,30 @@ export default function RegistrationsPage() {
                 {registrations.map((reg) => (
                   <tr key={reg.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 font-medium text-gray-900">{reg.name}</td>
-                    <td className="px-4 py-3 text-gray-600">{reg.email}</td>
-                    <td className="px-4 py-3 text-gray-600">{reg.phone}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs">{reg.email}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs">{reg.phone}</td>
+                    <td className="px-4 py-3">
+                      {reg.pipedrive_deal_url ? (
+                        <a
+                          href={reg.pipedrive_deal_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          #{reg.pipedrive_deal_url.split("/").pop()}
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-gray-500 text-xs">{getSessionLabel(reg.session_id)}</td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{formatDate(reg.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-600 text-xs max-w-[200px] truncate" title={reg.observacoes || ""}>
+                      {reg.observacoes ? reg.observacoes : <span className="text-gray-300">—</span>}
+                    </td>
                     <td className="px-4 py-3">
                       {reg.attended_at ? (
                         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">

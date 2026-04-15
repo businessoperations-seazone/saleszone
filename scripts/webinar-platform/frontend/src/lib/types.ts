@@ -42,6 +42,16 @@ export interface Registration {
   name: string;
   email: string;
   phone: string;
+  pipedrive_deal_url: string | null;
+  observacoes: string | null;
+  cidade: string | null;
+  tipo_imovel: string | null;
+  is_opportunity: boolean | null;
+  opportunity_marked_at: string | null;
+  fireflies_transcript_id: string | null;
+  transcript_summary: string | null;
+  transcript_synced_at: string | null;
+  pipedrive_transcript_note_id: number | null;
   confirmed_at: string | null;
   attended_at: string | null;
   cancelled_at: string | null;

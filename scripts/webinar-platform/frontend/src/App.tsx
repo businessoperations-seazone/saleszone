@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import SchedulePage from "./pages/SchedulePage";
+import ExternalSchedulePage from "./pages/ExternalSchedulePage";
 import WaitingRoom from "./pages/WaitingRoom";
 import LiveRoom from "./pages/LiveRoom";
 import ThankYou from "./pages/ThankYou";
@@ -16,6 +17,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/agendar/:closerSlug" element={<ExternalSchedulePage />} />
         <Route path="/:closerSlug" element={<SchedulePage />} />
         <Route path="/webinar/sala/:sessionId" element={<WaitingRoom />} />
         <Route path="/webinar/sala/:sessionId/live" element={<LiveRoom />} />

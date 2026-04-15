@@ -37,26 +37,95 @@ function getSupabase() {
   );
 }
 
-// ── Email via Resend ──────────────────────────────────────────────────────────
+// ── Google SA JWT helpers (for Gmail send) ────────────────────────────────────
+
+function base64url(data: Uint8Array): string {
+  return btoa(String.fromCharCode(...data)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const b64 = pem.replace(/-----BEGIN.*?-----/g, "").replace(/-----END.*?-----/g, "").replace(/\s/g, "");
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey("pkcs8", pemToArrayBuffer(pem), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+}
+
+async function getGmailAccessToken(saEmail: string, privateKey: CryptoKey, impersonate: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: saEmail,
+    sub: impersonate,
+    scope: "https://www.googleapis.com/auth/gmail.send",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const enc = new TextEncoder();
+  const headerB64 = base64url(enc.encode(JSON.stringify(header)));
+  const payloadB64 = base64url(enc.encode(JSON.stringify(payload)));
+  const unsigned = `${headerB64}.${payloadB64}`;
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, enc.encode(unsigned));
+  const jwt = `${unsigned}.${base64url(new Uint8Array(signature))}`;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Gmail OAuth error: ${res.status} ${err}`);
+  }
+  return (await res.json()).access_token;
+}
+
+// ── Email via Gmail API ──────────────────────────────────────────────────────
+
+const GMAIL_SENDER = "agendamentos@seazone.com.br";
 
 async function sendEmail(senderName: string, to: string, subject: string, html: string): Promise<void> {
-  const apiKey = Deno.env.get("RESEND_API_KEY");
-  if (!apiKey) throw new Error("RESEND_API_KEY not configured");
+  const credsJson = Deno.env.get("GOOGLE_CALENDAR_CREDENTIALS");
+  if (!credsJson) throw new Error("GOOGLE_CALENDAR_CREDENTIALS not configured");
+  const creds = JSON.parse(credsJson);
+  const privateKey = await importPrivateKey(creds.private_key);
+  const accessToken = await getGmailAccessToken(creds.client_email, privateKey, GMAIL_SENDER);
 
-  // Use Resend default domain for now (until seazone.com.br is verified in Resend)
-  const from = `${senderName} <onboarding@resend.dev>`;
+  // Build raw RFC 2822 email
+  const boundary = `boundary_${Date.now()}`;
+  const rawParts = [
+    `From: ${senderName} <${GMAIL_SENDER}>`,
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`,
+    `MIME-Version: 1.0`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/html; charset=UTF-8`,
+    `Content-Transfer-Encoding: base64`,
+    ``,
+    btoa(unescape(encodeURIComponent(html))),
+    `--${boundary}--`,
+  ];
+  const raw = rawParts.join("\r\n");
+  const rawB64 = btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 
-  const resp = await fetch("https://api.resend.com/emails", {
+  const resp = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${GMAIL_SENDER}/messages/send`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${apiKey}`,
+      Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ from, to, subject, html }),
+    body: JSON.stringify({ raw: rawB64 }),
   });
   if (!resp.ok) {
     const err = await resp.text();
-    throw new Error(`Resend API error: ${resp.status} ${err}`);
+    throw new Error(`Gmail API error: ${resp.status} ${err}`);
   }
 }
 
@@ -66,89 +135,152 @@ function buildConfirmationEmail(
   sessionStartsAt: string,
   roomUrl: string
 ): string {
-  // Format date in pt-BR, BRT timezone
   const dt = new Date(sessionStartsAt);
   const dateStr = dt.toLocaleDateString("pt-BR", {
     timeZone: "America/Sao_Paulo",
     weekday: "long",
     day: "2-digit",
     month: "long",
-    year: "numeric",
   });
   const timeStr = dt.toLocaleTimeString("pt-BR", {
     timeZone: "America/Sao_Paulo",
     hour: "2-digit",
     minute: "2-digit",
   });
-
   const firstName = leadName.split(" ")[0];
+  const blue = "#0066CC";
+  const year = new Date().getFullYear();
 
   return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f8;padding:32px 0;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;max-width:600px;width:100%;">
-          <!-- Header -->
-          <tr>
-            <td style="background:#0f172a;padding:28px 40px;text-align:center;">
-              <h1 style="color:#ffffff;font-size:22px;margin:0;letter-spacing:0.5px;">Seazone Investimentos</h1>
+<body style="margin:0;padding:0;background:linear-gradient(135deg,#eff6ff,#ffffff,#ecfeff);font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+        <!-- Logo -->
+        <tr><td style="padding:0 0 24px;">
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td style="background:${blue};border-radius:12px;width:40px;height:40px;text-align:center;vertical-align:middle;">
+              <span style="color:#fff;font-size:18px;">&#8962;</span>
             </td>
-          </tr>
-          <!-- Body -->
-          <tr>
-            <td style="padding:40px 40px 32px;color:#1e293b;">
-              <p style="font-size:18px;font-weight:bold;margin:0 0 16px;">Olá, ${firstName}! 👋</p>
-              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
-                Seu agendamento está confirmado! Estamos animados em recebê-lo na nossa apresentação.
-              </p>
-              <!-- Info box -->
-              <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:4px;margin-bottom:28px;">
-                <tr>
-                  <td style="padding:20px 24px;">
-                    <p style="margin:0 0 8px;font-size:13px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">Data e horário</p>
-                    <p style="margin:0;font-size:16px;font-weight:bold;color:#0f172a;text-transform:capitalize;">${dateStr} às ${timeStr} (BRT)</p>
-                  </td>
-                </tr>
-              </table>
-              <!-- CTA -->
-              <p style="font-size:15px;line-height:1.6;margin:0 0 24px;">
-                Clique no botão abaixo para acessar a sala no momento da apresentação:
-              </p>
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto 32px;">
-                <tr>
-                  <td style="background:#0ea5e9;border-radius:6px;">
-                    <a href="${roomUrl}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:15px;font-weight:bold;text-decoration:none;">Acessar a sala</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 8px;">
-                Você também receberá um lembrete automático <strong>1 hora antes</strong> da sessão começar.
-              </p>
-              <p style="font-size:14px;line-height:1.6;color:#475569;margin:0 0 32px;">
-                Qualquer dúvida, é só responder a este e-mail.
-              </p>
-              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 24px;">
-              <p style="font-size:14px;color:#1e293b;margin:0;">
-                Abraço,<br>
-                <strong>${closerName}</strong><br>
-                <span style="color:#64748b;">Seazone Investimentos</span>
-              </p>
+            <td style="padding-left:12px;">
+              <span style="font-size:22px;font-weight:bold;color:${blue};letter-spacing:-0.5px;">Seazone</span>
             </td>
-          </tr>
-          <!-- Footer -->
-          <tr>
-            <td style="background:#f8fafc;padding:20px 40px;text-align:center;border-top:1px solid #e2e8f0;">
-              <p style="margin:0;font-size:12px;color:#94a3b8;">
-                © ${new Date().getFullYear()} Seazone Investimentos · Este é um e-mail automático, não responda caso não reconheça este agendamento.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
+          </tr></table>
+        </td></tr>
+
+        <!-- Headline -->
+        <tr><td style="padding:0 0 28px;">
+          <h1 style="margin:0;font-size:26px;line-height:1.3;color:#0f172a;">
+            ${firstName}, sua apresentação está confirmada!
+          </h1>
+          <p style="margin:8px 0 0;font-size:15px;color:#64748b;line-height:1.5;">
+            Você está a um passo de descobrir como transformar seu imóvel em <strong style="color:${blue};">renda passiva</strong>.
+          </p>
+        </td></tr>
+
+        <!-- Session card -->
+        <tr><td>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;border:1px solid #dbeafe;box-shadow:0 4px 24px rgba(0,102,204,0.08);">
+            <tr><td style="padding:28px 28px 8px;">
+              <p style="margin:0 0 4px;font-size:20px;font-weight:bold;color:#0f172a;">Sua Apresentação</p>
+              <p style="margin:0;font-size:14px;color:#64748b;">Prepare-se para sua sessão exclusiva.</p>
+            </td></tr>
+            <tr><td style="padding:0 28px;"><div style="border-top:1px solid #f1f5f9;margin:16px 0;"></div></td></tr>
+            <!-- Date -->
+            <tr><td style="padding:0 28px 12px;">
+              <table cellpadding="0" cellspacing="0"><tr>
+                <td style="vertical-align:top;padding-right:12px;">
+                  <span style="font-size:18px;">&#128197;</span>
+                </td>
+                <td>
+                  <p style="margin:0;font-size:11px;font-weight:bold;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Data</p>
+                  <p style="margin:2px 0 0;font-size:15px;font-weight:600;color:#1e293b;text-transform:capitalize;">${dateStr}</p>
+                </td>
+              </tr></table>
+            </td></tr>
+            <!-- Time -->
+            <tr><td style="padding:0 28px 12px;">
+              <table cellpadding="0" cellspacing="0"><tr>
+                <td style="vertical-align:top;padding-right:12px;">
+                  <span style="font-size:18px;">&#128336;</span>
+                </td>
+                <td>
+                  <p style="margin:0;font-size:11px;font-weight:bold;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Horário</p>
+                  <p style="margin:2px 0 0;font-size:15px;font-weight:600;color:#1e293b;">${timeStr} (BRT)</p>
+                </td>
+              </tr></table>
+            </td></tr>
+            <!-- Presenter -->
+            <tr><td style="padding:0 28px 20px;">
+              <table cellpadding="0" cellspacing="0"><tr>
+                <td style="vertical-align:top;padding-right:12px;">
+                  <span style="font-size:18px;">&#128100;</span>
+                </td>
+                <td>
+                  <p style="margin:0;font-size:11px;font-weight:bold;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Apresentadora</p>
+                  <p style="margin:2px 0 0;font-size:15px;font-weight:600;color:#1e293b;">${closerName}</p>
+                </td>
+              </tr></table>
+            </td></tr>
+            <tr><td style="padding:0 28px;"><div style="border-top:1px solid #f1f5f9;margin:0 0 20px;"></div></td></tr>
+            <!-- CTA -->
+            <tr><td align="center" style="padding:0 28px 28px;">
+              <table cellpadding="0" cellspacing="0" width="100%"><tr>
+                <td align="center" style="background:${blue};border-radius:12px;">
+                  <a href="${roomUrl}" style="display:block;padding:16px 32px;color:#ffffff;font-size:16px;font-weight:bold;text-decoration:none;text-align:center;">
+                    Acessar Sala de Espera
+                  </a>
+                </td>
+              </tr></table>
+              <p style="margin:12px 0 0;font-size:12px;color:#94a3b8;">Mantenha o link salvo — use-o no dia da apresentação.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+
+        <!-- Info cards -->
+        <tr><td style="padding:24px 0 0;">
+          <!-- Portfolio -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;border:1px solid #dbeafe;margin-bottom:12px;">
+            <tr><td style="padding:16px 20px;">
+              <p style="margin:0 0 4px;font-size:11px;font-weight:bold;color:${blue};text-transform:uppercase;letter-spacing:0.5px;">Nosso portfólio</p>
+              <p style="margin:0 0 6px;font-size:13px;color:#475569;line-height:1.5;">Mais de 1000 imóveis gerenciados em Florianópolis, Natal, Praia do Rosa e muito mais.</p>
+              <a href="https://seazone.com.br" style="font-size:12px;color:${blue};font-weight:600;text-decoration:none;">Visitar seazone.com.br &#8594;</a>
+            </td></tr>
+          </table>
+          <!-- Social -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;border:1px solid #dbeafe;margin-bottom:12px;">
+            <tr><td style="padding:16px 20px;">
+              <p style="margin:0 0 4px;font-size:11px;font-weight:bold;color:${blue};text-transform:uppercase;letter-spacing:0.5px;">Redes sociais</p>
+              <p style="margin:0 0 6px;font-size:13px;color:#475569;line-height:1.5;">Conheça histórias reais de proprietários que transformaram seus imóveis com a Seazone.</p>
+              <a href="https://instagram.com/destinoseazone" style="font-size:12px;color:${blue};font-weight:600;text-decoration:none;">@destinoseazone</a>
+              <span style="color:#cbd5e1;margin:0 6px;">·</span>
+              <a href="https://instagram.com/monicamedeiross" style="font-size:12px;color:${blue};font-weight:600;text-decoration:none;">@monicamedeiross</a>
+            </td></tr>
+          </table>
+          <!-- Tip -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#fffbeb;border-radius:12px;border:1px solid #fde68a;">
+            <tr><td style="padding:16px 20px;">
+              <p style="margin:0 0 4px;font-size:11px;font-weight:bold;color:#92400e;text-transform:uppercase;letter-spacing:0.5px;">Dica</p>
+              <p style="margin:0;font-size:13px;color:#44403c;line-height:1.5;">Tenha papel e caneta em mãos — vamos mostrar números reais que você vai querer anotar.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="padding:28px 0 0;text-align:center;">
+          <p style="margin:0 0 4px;font-size:13px;color:#1e293b;">
+            Abraço, <strong>${closerName}</strong> — Seazone Investimentos
+          </p>
+          <p style="margin:0;font-size:11px;color:#94a3b8;">
+            &copy; ${year} Seazone Investimentos &middot; Qualquer dúvida, responda a este e-mail.
+          </p>
+        </td></tr>
+
+      </table>
+    </td></tr>
   </table>
 </body>
 </html>`;
@@ -689,13 +821,19 @@ async function handleSessions(method: string, segments: string[], req: Request) 
     const status = url.searchParams.get("status");
     const closerId = url.searchParams.get("closer_id");
 
-    let q = supabase.from("webinar_sessions").select("*").order("date").order("starts_at");
+    let q = supabase.from("webinar_sessions").select("*, webinar_registrations(count)").order("date").order("starts_at");
     if (dateFrom) q = q.gte("date", dateFrom);
     if (dateTo) q = q.lte("date", dateTo);
     if (status) q = q.eq("status", status);
     if (closerId) q = q.eq("closer_id", closerId);
     const { data } = await q;
-    return json(data || []);
+    const sessions = (data || []).map((s: Record<string, unknown>) => {
+      const regs = s.webinar_registrations as { count: number }[] | undefined;
+      const count = regs?.[0]?.count ?? 0;
+      const { webinar_registrations: _r, ...rest } = s;
+      return { ...rest, registration_count: count };
+    });
+    return json(sessions);
   }
 
   // POST /sessions (admin)
@@ -771,6 +909,149 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     return json(updated || { ...(reg as object), cancelled_at: now });
   }
 
+  // POST /registrations/external (public form: creates Pipedrive deal + registration)
+  if (method === "POST" && segments[0] === "external") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const required = ["session_id", "name", "email", "phone", "cidade", "closer_slug"];
+    const missing = required.filter((f) => !data[f]);
+    if (missing.length) return json({ error: `Campos obrigatórios ausentes: ${missing.join(", ")}` }, 400);
+
+    const sessionId = data.session_id as string;
+    const name = (data.name as string).trim();
+    const email = (data.email as string).toLowerCase().trim();
+    const phone = (data.phone as string).trim();
+    const cidade = (data.cidade as string).trim();
+    const closerSlug = data.closer_slug as string;
+
+    // Validate session and closer
+    const { data: session } = await supabase.from("webinar_sessions").select("*, webinar_closers(*)").eq("id", sessionId).maybeSingle();
+    if (!session) return json({ error: "Sessão não encontrada" }, 404);
+    const s = session as Record<string, unknown>;
+    if (s.status === "cancelled") return json({ error: "Sessão cancelada" }, 409);
+    const closer = s.webinar_closers as Record<string, unknown> | null;
+    if (!closer || closer.slug !== closerSlug) return json({ error: "Closer inválido para esta sessão" }, 400);
+    const closerEmail = closer.email as string;
+
+    // Check duplicate
+    const { data: existingRegs } = await supabase
+      .from("webinar_registrations")
+      .select("id, session_id, access_token")
+      .eq("email", email)
+      .is("cancelled_at", null);
+    if (existingRegs && existingRegs.length > 0) {
+      const sameSession = existingRegs.find((r: Record<string, unknown>) => r.session_id === sessionId);
+      if (sameSession) {
+        const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${sameSession.access_token}`;
+        return json({ already_registered: true, room_url: roomUrl, message: "Você já está inscrito nesta sessão." });
+      }
+      const otherSessionId = existingRegs[0].session_id as string;
+      const { data: otherSession } = await supabase.from("webinar_sessions").select("date, starts_at").eq("id", otherSessionId).maybeSingle();
+      return json({
+        has_existing: true,
+        existing_session_id: otherSessionId,
+        existing_registration_id: existingRegs[0].id,
+        existing_starts_at: otherSession ? (otherSession as Record<string, unknown>).starts_at as string : null,
+        message: "Você já possui um agendamento. Deseja reagendar para este horário?",
+      }, 409);
+    }
+
+    // 1. Find Pipedrive owner (closer) user ID
+    const ownerId = await pipedriveFindUserByEmail(closerEmail);
+    if (!ownerId) return json({ error: `Closer ${closerEmail} não encontrado no Pipedrive` }, 500);
+
+    // 2. Create/find Person
+    const personResult = await pipedriveFindOrCreatePerson(name, email, phone);
+    if (!personResult.ok || !personResult.person_id) {
+      return json({ error: `Erro ao criar contato no Pipedrive: ${personResult.error}` }, 500);
+    }
+
+    // 3. Create Deal
+    const dealTitle = `[webinar] ${name} - ${cidade}`;
+    const dealResult = await pipedriveCreateWebinarDeal(dealTitle, personResult.person_id, ownerId);
+    if (!dealResult.ok || !dealResult.deal_id) {
+      return json({ error: `Erro ao criar deal no Pipedrive: ${dealResult.error}` }, 500);
+    }
+
+    // 4. Create registration with deal URL + cidade
+    const insertPayload: Record<string, unknown> = {
+      session_id: sessionId,
+      name,
+      email,
+      phone,
+      pipedrive_deal_url: dealResult.deal_url,
+      cidade,
+    };
+    const { data: reg, error: regErr } = await supabase.from("webinar_registrations").insert(insertPayload).select().single();
+    if (regErr) return json({ error: regErr.message, pipedrive_deal_id: dealResult.deal_id }, 500);
+
+    const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${reg.access_token}`;
+
+    // 5. Send confirmation email
+    try {
+      const startsAt = (s.starts_at as string) || new Date().toISOString();
+      const senderName = (closer.name as string) || "Seazone";
+      const html = buildConfirmationEmail(name, senderName, startsAt, roomUrl);
+      await sendEmail(senderName, email, "Seu agendamento na Seazone está confirmado!", html);
+    } catch (err) {
+      console.error("[webinar-api] email failed (external reg):", err);
+    }
+
+    return json({
+      access_token: reg.access_token,
+      room_url: roomUrl,
+      registration: reg,
+      pipedrive_deal_id: dealResult.deal_id,
+      pipedrive_deal_url: dealResult.deal_url,
+    }, 201);
+  }
+
+  // POST /registrations/reschedule
+  if (method === "POST" && segments[0] === "reschedule") {
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+    const registrationId = data.registration_id as string;
+    const newSessionId = data.new_session_id as string;
+    if (!registrationId || !newSessionId) return json({ error: "Campos registration_id e new_session_id são obrigatórios" }, 400);
+
+    // Cancel old registration
+    const now = new Date().toISOString();
+    await supabase.from("webinar_registrations").update({ cancelled_at: now }).eq("id", registrationId);
+
+    // Get old registration data for the new one
+    const { data: oldReg } = await supabase.from("webinar_registrations").select("*").eq("id", registrationId).single();
+    if (!oldReg) return json({ error: "Inscrição não encontrada" }, 404);
+    const old = oldReg as Record<string, unknown>;
+
+    // Create new registration
+    const { data: newReg, error } = await supabase.from("webinar_registrations").insert({
+      session_id: newSessionId,
+      name: old.name,
+      email: old.email,
+      phone: old.phone,
+      pipedrive_deal_url: old.pipedrive_deal_url,
+    }).select().single();
+    if (error) return json({ error: error.message }, 500);
+
+    const roomUrl = `${FRONTEND_URL}/webinar/sala/${newSessionId}?token=${newReg.access_token}`;
+
+    // Send confirmation email for the new session
+    try {
+      const { data: newSession } = await supabase.from("webinar_sessions").select("starts_at, closer_id").eq("id", newSessionId).single();
+      let closerName = "Seazone";
+      if (newSession?.closer_id) {
+        const { data: cl } = await supabase.from("webinar_closers").select("name").eq("id", newSession.closer_id).maybeSingle();
+        if (cl) closerName = (cl as Record<string, unknown>).name as string;
+      }
+      const startsAt = (newSession as Record<string, unknown>)?.starts_at as string || new Date().toISOString();
+      const htmlBody = buildConfirmationEmail(old.name as string, closerName, startsAt, roomUrl);
+      await sendEmail(closerName, old.email as string, "Seu agendamento na Seazone foi reagendado!", htmlBody);
+      console.log(`[webinar-api] Reschedule confirmation email sent to ${old.email}`);
+    } catch (emailErr) {
+      console.error("[webinar-api] Failed to send reschedule email:", emailErr);
+    }
+
+    return json({ ...newReg, room_url: roomUrl });
+  }
+
   // POST /registrations (register lead)
   if (method === "POST") {
     const data = await req.json().catch(() => ({})) as Record<string, unknown>;
@@ -811,14 +1092,44 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
       if ((count ?? 0) >= maxParticipants) return json({ error: "Capacidade esgotada" }, 409);
     }
 
+    // Check if email already has an active registration
+    const email = (data.email as string).toLowerCase().trim();
+    const { data: existingRegs } = await supabase
+      .from("webinar_registrations")
+      .select("id, session_id, access_token")
+      .eq("email", email)
+      .is("cancelled_at", null);
+
+    if (existingRegs && existingRegs.length > 0) {
+      const sameSession = existingRegs.find((r: Record<string, unknown>) => r.session_id === sessionId);
+      if (sameSession) {
+        // Already registered for this exact session — return existing token
+        const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${sameSession.access_token}`;
+        return json({ already_registered: true, room_url: roomUrl, message: "Você já está inscrito nesta sessão." });
+      }
+      // Has registration for a different session — offer reschedule
+      const otherSessionId = existingRegs[0].session_id as string;
+      const { data: otherSession } = await supabase.from("webinar_sessions").select("date, starts_at").eq("id", otherSessionId).maybeSingle();
+      const existingDate = otherSession ? (otherSession as Record<string, unknown>).starts_at as string : null;
+      return json({
+        has_existing: true,
+        existing_session_id: otherSessionId,
+        existing_registration_id: existingRegs[0].id,
+        existing_starts_at: existingDate,
+        message: "Você já possui um agendamento. Deseja reagendar para este horário?",
+      }, 409);
+    }
+
     // Let the DB generate access_token (uuid DEFAULT gen_random_uuid())
     const insertPayload: Record<string, unknown> = {
       session_id: sessionId,
       name: data.name,
-      email: data.email,
+      email: email,
       phone: data.phone,
     };
     if (data.pipedrive_deal_url) insertPayload.pipedrive_deal_url = data.pipedrive_deal_url;
+    if (data.cidade) insertPayload.cidade = data.cidade;
+    if (data.tipo_imovel) insertPayload.tipo_imovel = data.tipo_imovel;
 
     const { data: reg, error } = await supabase.from("webinar_registrations").insert(insertPayload).select().single();
     if (error) return json({ error: error.message }, 500);
@@ -972,6 +1283,142 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
     const { data: created, error } = await supabase.from("webinar_messages").insert(message).select().single();
     if (error) return json({ error: error.message }, 500);
     return json(created, 201);
+  }
+
+  // GET /admin/registrations (all)
+  if (method === "GET" && segments[0] === "registrations" && !segments[1]) {
+    const { data } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .is("cancelled_at", null)
+      .order("created_at", { ascending: false });
+    return json(data || []);
+  }
+
+  // POST /admin/registrations/:id/sync-transcript (fetch Fireflies + sync to Pipedrive)
+  if (method === "POST" && segments[0] === "registrations" && segments[1] && segments[2] === "sync-transcript") {
+    const registrationId = segments[1];
+
+    const { data: reg } = await supabase
+      .from("webinar_registrations")
+      .select("*, webinar_sessions(*, webinar_closers(email, name))")
+      .eq("id", registrationId)
+      .maybeSingle();
+    if (!reg) return json({ error: "Inscrição não encontrada" }, 404);
+
+    const r = reg as Record<string, unknown>;
+    const sess = r.webinar_sessions as Record<string, unknown> | null;
+    if (!sess) return json({ error: "Sessão não encontrada" }, 404);
+    const closer = sess.webinar_closers as Record<string, unknown> | null;
+    const closerEmail = (closer?.email as string) || "";
+    const regCidade = (r.cidade as string) || null;
+    if (!closerEmail) return json({ error: "Closer sem email configurado" }, 400);
+
+    try {
+      const meetLink = sess.google_meet_link as string | null;
+      const meetCode = extractMeetCode(meetLink);
+
+      // Search Drive for a transcript/notes doc matching this session
+      const file = await driveSearchTranscriptDoc(sess.starts_at as string, meetCode, regCidade, r.name as string);
+      if (!file) {
+        return json({
+          ok: false,
+          error: `Nenhum documento encontrado para "${regCidade || "cidade não definida"}" + "${r.name || "lead"}" no período da sessão. Verifique se a reunião foi gravada/transcrita e se a cidade do inscrito está preenchida para desambiguar.`,
+        });
+      }
+
+      const docText = await driveFetchTextFromFile(file);
+      if (!docText.trim()) {
+        return json({ ok: false, error: "Documento encontrado mas está vazio.", file_id: file.id, file_name: file.name });
+      }
+
+      const note = buildDriveTranscriptNote(file, docText, r.name as string, sess.starts_at as string);
+
+      // Sync to Pipedrive
+      const dealId = extractDealId(r.pipedrive_deal_url as string | null);
+      let pipedriveResult: { ok: boolean; error?: string; note_id?: number } = { ok: false, error: "no deal url" };
+      if (dealId) {
+        pipedriveResult = await pipedriveCreateNote(dealId, note);
+      }
+
+      const preview = docText.slice(0, 500);
+      await supabase.from("webinar_registrations").update({
+        fireflies_transcript_id: file.id,
+        transcript_summary: preview,
+        transcript_synced_at: new Date().toISOString(),
+        pipedrive_transcript_note_id: pipedriveResult.note_id || null,
+      }).eq("id", registrationId);
+
+      return json({
+        ok: true,
+        source: "google_drive",
+        file_id: file.id,
+        file_name: file.name,
+        doc_url: `https://docs.google.com/document/d/${file.id}`,
+        pipedrive: pipedriveResult,
+      });
+    } catch (err) {
+      return json({ ok: false, error: (err as Error).message }, 500);
+    }
+  }
+
+  // PATCH /admin/registrations/:id (update observacoes + is_opportunity)
+  if (method === "PATCH" && segments[0] === "registrations" && segments[1]) {
+    const registrationId = segments[1];
+    const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+
+    // Fetch current registration to compare
+    const { data: existing } = await supabase
+      .from("webinar_registrations")
+      .select("*")
+      .eq("id", registrationId)
+      .maybeSingle();
+    if (!existing) return json({ error: "Inscrição não encontrada" }, 404);
+    const reg = existing as Record<string, unknown>;
+
+    const updateData: Record<string, unknown> = {};
+    if ("observacoes" in data) updateData.observacoes = data.observacoes;
+    if ("cidade" in data) updateData.cidade = data.cidade;
+    if ("tipo_imovel" in data) updateData.tipo_imovel = data.tipo_imovel;
+    if ("is_opportunity" in data) {
+      updateData.is_opportunity = data.is_opportunity;
+      if (data.is_opportunity === true && reg.is_opportunity !== true) {
+        updateData.opportunity_marked_at = new Date().toISOString();
+      }
+    }
+    if (Object.keys(updateData).length === 0) return json({ error: "Nenhum campo para atualizar" }, 400);
+
+    const { data: updated, error } = await supabase
+      .from("webinar_registrations")
+      .update(updateData)
+      .eq("id", registrationId)
+      .select()
+      .single();
+    if (error) return json({ error: error.message }, 500);
+
+    // Pipedrive side-effects (best-effort, don't fail PATCH)
+    const pipedriveResults: Record<string, unknown> = {};
+    const dealId = extractDealId(reg.pipedrive_deal_url as string | null);
+
+    if (dealId) {
+      // Move stage if marked as opportunity (and wasn't before)
+      if (data.is_opportunity === true && reg.is_opportunity !== true) {
+        const stageResult = await pipedriveMoveDealStage(dealId);
+        pipedriveResults.stage_move = stageResult;
+        console.log(`[webinar-api] Pipedrive move stage for deal ${dealId}:`, stageResult);
+      }
+      // Create note if observacoes was set/changed and not empty
+      if ("observacoes" in data && data.observacoes && data.observacoes !== reg.observacoes) {
+        const now = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+        const closerName = (reg.name as string) || "Inscrito";
+        const noteContent = `<h3>📝 Observações do Webinar</h3><p><strong>Inscrito:</strong> ${closerName}</p><p><strong>Atualizado em:</strong> ${now}</p><hr/><p>${(data.observacoes as string).replace(/\n/g, "<br/>")}</p>`;
+        const noteResult = await pipedriveCreateNote(dealId, noteContent);
+        pipedriveResults.note_created = noteResult;
+        console.log(`[webinar-api] Pipedrive note for deal ${dealId}:`, noteResult);
+      }
+    }
+
+    return json({ ...updated, _pipedrive: pipedriveResults });
   }
 
   // GET /admin/sessions/:id/registrations
@@ -1131,6 +1578,568 @@ async function handlePipedriveLookup(req: Request) {
   });
 }
 
+// ── Google Drive transcript helpers (SA self-auth, no DWD) ────────────────────
+
+async function getDriveAccessToken(): Promise<string> {
+  const credsJson = Deno.env.get("GOOGLE_CALENDAR_CREDENTIALS");
+  if (!credsJson) throw new Error("GOOGLE_CALENDAR_CREDENTIALS not set");
+  const creds = JSON.parse(credsJson);
+  const privateKey = await importPrivateKey(creds.private_key);
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: creds.client_email,
+    // No `sub` → SA acts as itself (no impersonation, no DWD needed)
+    scope: "https://www.googleapis.com/auth/drive.readonly",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const enc = new TextEncoder();
+  const headerB64 = base64url(enc.encode(JSON.stringify(header)));
+  const payloadB64 = base64url(enc.encode(JSON.stringify(payload)));
+  const unsigned = `${headerB64}.${payloadB64}`;
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, enc.encode(unsigned));
+  const jwt = `${unsigned}.${base64url(new Uint8Array(sig))}`;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  if (!res.ok) throw new Error(`Drive OAuth: ${res.status} ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+type DriveFile = { id: string; name: string; modifiedTime: string; mimeType: string };
+
+const MIME_GDOC = "application/vnd.google-apps.document";
+const MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+function normalizeStr(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+async function driveSearchTranscriptDoc(
+  sessionStartsAt: string,
+  meetCode: string | null,
+  slotCidade: string | null,
+  leadName: string | null,
+): Promise<DriveFile | null> {
+  const accessToken = await getDriveAccessToken();
+  const sessionDate = new Date(sessionStartsAt);
+  const fromIso = new Date(sessionDate.getTime() - 6 * 60 * 60 * 1000).toISOString();
+  const toIso = new Date(sessionDate.getTime() + 8 * 60 * 60 * 1000).toISOString();
+
+  const mimeClause = `(mimeType='${MIME_GDOC}' or mimeType='${MIME_DOCX}')`;
+  const qParts = [
+    mimeClause,
+    `modifiedTime > '${fromIso}'`,
+    `modifiedTime < '${toIso}'`,
+    `trashed = false`,
+  ];
+  const q = encodeURIComponent(qParts.join(" and "));
+  const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,modifiedTime,parents)&orderBy=modifiedTime desc&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) throw new Error(`Drive search: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  const files: DriveFile[] = data.files || [];
+  if (files.length === 0) return null;
+
+  const sessionIsoBasic = sessionDate.toISOString().split(".")[0];
+  const sessionDateFragment = sessionIsoBasic.replace(/:/g, "-");
+  const cidadeNorm = slotCidade ? normalizeStr(slotCidade) : null;
+  const leadFirstName = leadName ? normalizeStr(leadName.split(/[\s,]+/)[0]) : null;
+  const leadTokens = leadName ? leadName.split(/[\s,]+/).map(normalizeStr).filter((t) => t.length >= 3) : [];
+
+  const scored = files.map((f) => {
+    const nRaw = f.name;
+    const n = normalizeStr(nRaw);
+    let score = 0;
+    // Timestamp match (good but not unique)
+    if (nRaw.includes(sessionDateFragment)) score += 50;
+    // Meet code if present
+    if (meetCode && n.includes(meetCode.toLowerCase())) score += 100;
+    // Cidade match (most important disambiguator when multiple meetings happen at same time)
+    if (cidadeNorm && n.includes(cidadeNorm)) score += 150;
+    // Lead name match (first name or any token ≥3 chars)
+    if (leadFirstName && n.includes(leadFirstName)) score += 120;
+    for (const tok of leadTokens) {
+      if (tok !== leadFirstName && n.includes(tok)) score += 40;
+    }
+    // Prefer transcripts
+    if (n.includes("transcript") || n.includes("transcricao")) score += 30;
+    if (n.includes("notes") || n.includes("notas")) score += 20;
+    if (f.mimeType === MIME_GDOC) score += 5;
+    // Time proximity (small penalty)
+    const timeDiff = Math.abs(new Date(f.modifiedTime).getTime() - sessionDate.getTime());
+    score -= Math.min(timeDiff / (60 * 60 * 1000), 15);
+    return { file: f, score };
+  }).sort((a, b) => b.score - a.score);
+
+  // Require at least cidade OR lead name to match, otherwise we'd just pick a random meeting
+  const minScoreThreshold = (cidadeNorm || leadFirstName) ? 100 : 50;
+  if (scored[0].score < minScoreThreshold) return null;
+  return scored[0].file;
+}
+
+async function driveFetchTextFromFile(file: DriveFile): Promise<string> {
+  const accessToken = await getDriveAccessToken();
+
+  if (file.mimeType === MIME_GDOC) {
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) throw new Error(`Drive export: ${res.status} ${await res.text()}`);
+    return await res.text();
+  }
+
+  if (file.mimeType === MIME_DOCX) {
+    // Download raw .docx bytes
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) throw new Error(`Drive download: ${res.status} ${await res.text()}`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return await extractTextFromDocx(bytes);
+  }
+
+  throw new Error(`Unsupported mimeType: ${file.mimeType}`);
+}
+
+async function extractTextFromDocx(bytes: Uint8Array): Promise<string> {
+  // .docx is a ZIP containing word/document.xml. We read that XML and extract <w:t> text runs.
+  const { BlobReader, ZipReader, TextWriter } = await import("https://deno.land/x/zipjs@v2.7.45/index.js");
+  const reader = new ZipReader(new BlobReader(new Blob([bytes as BlobPart])));
+  const entries = await reader.getEntries();
+  const docEntry = entries.find((e: { filename: string }) => e.filename === "word/document.xml");
+  if (!docEntry) {
+    await reader.close();
+    throw new Error("docx: word/document.xml não encontrado");
+  }
+  const xml = await docEntry.getData(new TextWriter());
+  await reader.close();
+  // Extract text: runs of <w:t>text</w:t> joined by spaces; <w:p> paragraphs by newline
+  const paragraphs = xml.split(/<\/w:p>/).map((p: string) => {
+    const texts = [...p.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]);
+    return texts.join("").trim();
+  }).filter((t: string) => t.length > 0);
+  return paragraphs.join("\n");
+}
+
+function buildDriveTranscriptNote(
+  file: DriveFile,
+  docText: string,
+  leadName: string,
+  sessionStartsAt: string,
+): string {
+  const dateStr = new Date(sessionStartsAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const MAX = 8000;
+  let body = docText.trim();
+  let truncated = false;
+  if (body.length > MAX) {
+    body = body.slice(0, MAX) + "…";
+    truncated = true;
+  }
+  const bodyHtml = body.split("\n").map((l) => l.trim() ? `<p style="margin:4px 0;">${l}</p>` : "<br/>").join("");
+  const docUrl = file.mimeType === MIME_GDOC
+    ? `https://docs.google.com/document/d/${file.id}`
+    : `https://drive.google.com/file/d/${file.id}/view`;
+  return `<h3>🎙️ Transcrição / Notas da Reunião</h3>
+<p><strong>Inscrito:</strong> ${leadName}</p>
+<p><strong>Data da sessão:</strong> ${dateStr}</p>
+<p><strong>Arquivo:</strong> <a href="${docUrl}">${file.name}</a></p>
+<hr/>
+<div style="font-size:13px;">${bodyHtml}</div>
+${truncated ? "<hr/><p style=\"font-size:11px;color:#777;\">Conteúdo truncado (limite 8000 caracteres). <a href=\"" + docUrl + "\">Ver documento completo</a>.</p>" : ""}
+<p style="font-size:11px;color:#777;">Fonte: Google Drive — ${file.id}</p>`;
+}
+
+// ── Google Meet transcript helpers ────────────────────────────────────────────
+
+async function getMeetAccessToken(hostEmail: string): Promise<string> {
+  const credsJson = Deno.env.get("GOOGLE_CALENDAR_CREDENTIALS");
+  if (!credsJson) throw new Error("GOOGLE_CALENDAR_CREDENTIALS not set");
+  const creds = JSON.parse(credsJson);
+  const privateKey = await importPrivateKey(creds.private_key);
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: creds.client_email,
+    sub: hostEmail,
+    scope: "https://www.googleapis.com/auth/meetings.space.readonly",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const enc = new TextEncoder();
+  const headerB64 = base64url(enc.encode(JSON.stringify(header)));
+  const payloadB64 = base64url(enc.encode(JSON.stringify(payload)));
+  const unsigned = `${headerB64}.${payloadB64}`;
+  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", privateKey, enc.encode(unsigned));
+  const jwt = `${unsigned}.${base64url(new Uint8Array(sig))}`;
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  if (!res.ok) throw new Error(`Meet OAuth: ${res.status} ${await res.text()}`);
+  return (await res.json()).access_token;
+}
+
+function extractMeetCode(meetLink: string | null | undefined): string | null {
+  if (!meetLink) return null;
+  const m = meetLink.match(/meet\.google\.com\/([a-z0-9-]+)/i);
+  return m ? m[1] : null;
+}
+
+async function googleMeetFindTranscript(
+  meetLink: string | null | undefined,
+  hostEmail: string,
+  sessionStartsAt: string,
+): Promise<{
+  title: string;
+  transcript_id: string;
+  conference_name: string;
+  full_text: string;
+  summary_preview: string;
+  participants: string[];
+  duration_min: number;
+  start_time: string;
+} | null> {
+  const meetCode = extractMeetCode(meetLink);
+  if (!meetCode) return null;
+
+  const accessToken = await getMeetAccessToken(hostEmail);
+  const authHeader = { Authorization: `Bearer ${accessToken}` };
+
+  // Get space
+  const spaceRes = await fetch(`https://meet.googleapis.com/v2/spaces/${meetCode}`, { headers: authHeader });
+  if (spaceRes.status === 404) return null;
+  if (!spaceRes.ok) throw new Error(`Meet spaces: ${spaceRes.status} ${await spaceRes.text()}`);
+  const space = await spaceRes.json();
+  const spaceName = space.name as string; // "spaces/{id}"
+
+  // List conference records for this space
+  const filter = encodeURIComponent(`space.name="${spaceName}"`);
+  const confRes = await fetch(`https://meet.googleapis.com/v2/conferenceRecords?filter=${filter}`, { headers: authHeader });
+  if (!confRes.ok) throw new Error(`Meet conferences: ${confRes.status} ${await confRes.text()}`);
+  const conferences: Record<string, unknown>[] = (await confRes.json()).conferenceRecords || [];
+  if (conferences.length === 0) return null;
+
+  // Pick conference closest to session start
+  const sessT = new Date(sessionStartsAt).getTime();
+  const conference = conferences.sort((a, b) => {
+    const ta = Math.abs(new Date(a.startTime as string).getTime() - sessT);
+    const tb = Math.abs(new Date(b.startTime as string).getTime() - sessT);
+    return ta - tb;
+  })[0];
+
+  // List transcripts
+  const transRes = await fetch(`https://meet.googleapis.com/v2/${conference.name}/transcripts`, { headers: authHeader });
+  if (!transRes.ok) return null;
+  const transcripts: Record<string, unknown>[] = (await transRes.json()).transcripts || [];
+  if (transcripts.length === 0) return null;
+  const transcript = transcripts[0];
+
+  // Fetch participants to map resource names to user emails/names
+  const partRes = await fetch(`https://meet.googleapis.com/v2/${conference.name}/participants`, { headers: authHeader });
+  const participantsList: Record<string, unknown>[] = partRes.ok ? ((await partRes.json()).participants || []) : [];
+  const partMap: Record<string, string> = {};
+  const participantLabels: string[] = [];
+  for (const p of participantsList) {
+    const name = p.name as string;
+    const user = (p.signedinUser || p.anonymousUser || p.phoneUser) as Record<string, unknown> | undefined;
+    const label = (user?.displayName as string) || (user?.email as string) || (user?.user as string) || `Participante`;
+    partMap[name] = label;
+    participantLabels.push(label);
+  }
+
+  // Fetch transcript entries (paginate)
+  const entries: Record<string, unknown>[] = [];
+  let pageToken = "";
+  for (let i = 0; i < 5; i++) {
+    const url = `https://meet.googleapis.com/v2/${transcript.name}/entries?pageSize=500${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const er = await fetch(url, { headers: authHeader });
+    if (!er.ok) break;
+    const ej = await er.json();
+    for (const e of (ej.transcriptEntries || [])) entries.push(e);
+    pageToken = ej.nextPageToken || "";
+    if (!pageToken) break;
+  }
+
+  // Build full text with speaker labels
+  const lines = entries.map((e) => {
+    const speaker = partMap[e.participant as string] || "Participante";
+    return `${speaker}: ${(e.text as string || "").trim()}`;
+  });
+  const fullText = lines.join("\n");
+
+  // Duration
+  const startTime = conference.startTime as string;
+  const endTime = (conference.endTime as string) || new Date().toISOString();
+  const durMin = Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000);
+
+  // Simple preview (first ~400 chars)
+  const preview = fullText.slice(0, 400);
+
+  return {
+    title: `Reunião ${new Date(startTime).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}`,
+    transcript_id: transcript.name as string,
+    conference_name: conference.name as string,
+    full_text: fullText,
+    summary_preview: preview,
+    participants: participantLabels,
+    duration_min: durMin,
+    start_time: startTime,
+  };
+}
+
+function buildGoogleMeetNote(t: NonNullable<Awaited<ReturnType<typeof googleMeetFindTranscript>>>, leadName: string): string {
+  const dateStr = new Date(t.start_time).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const participants = t.participants.slice(0, 10).join(", ");
+  // Limit transcript body to ~8000 chars for Pipedrive
+  const MAX = 8000;
+  let body = t.full_text;
+  let truncated = false;
+  if (body.length > MAX) {
+    body = body.slice(0, MAX) + "…";
+    truncated = true;
+  }
+  const bodyHtml = body.split("\n").map((l) => `<p style="margin:4px 0;">${l}</p>`).join("");
+  return `<h3>🎙️ Transcrição da Reunião (Google Meet)</h3>
+<p><strong>Inscrito:</strong> ${leadName}</p>
+<p><strong>Data:</strong> ${dateStr} · <strong>Duração:</strong> ${t.duration_min} min</p>
+<p><strong>Participantes:</strong> ${participants}</p>
+<hr/>
+<div style="max-height:400px;overflow-y:auto;font-size:13px;">${bodyHtml}</div>
+${truncated ? "<hr/><p style=\"font-size:11px;color:#777;\">Transcrição truncada (limite 8000 caracteres). Consulte o Google Meet para a transcrição completa.</p>" : ""}
+<p style="font-size:11px;color:#777;">Fonte: Google Meet — ${t.transcript_id}</p>`;
+}
+
+// ── Fireflies helpers ─────────────────────────────────────────────────────────
+
+async function firefliesFindTranscript(sessionStartsAt: string, closerEmail: string, participantEmail: string): Promise<Record<string, unknown> | null> {
+  const apiKey = Deno.env.get("FIREFLIES_API_KEY");
+  if (!apiKey) return null;
+
+  // Search window: ±2h around session start
+  const sessionDate = new Date(sessionStartsAt);
+  const fromDate = new Date(sessionDate.getTime() - 2 * 60 * 60 * 1000).toISOString();
+  const toDate = new Date(sessionDate.getTime() + 3 * 60 * 60 * 1000).toISOString();
+
+  const query = `{
+    transcripts(
+      fromDate: "${fromDate}"
+      toDate: "${toDate}"
+      limit: 50
+    ) {
+      id title dateString duration participants
+      summary { overview short_summary action_items keywords }
+    }
+  }`;
+
+  const resp = await fetch("https://api.fireflies.ai/graphql", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Fireflies API error: ${resp.status} ${await resp.text()}`);
+  }
+  const json = await resp.json();
+  const transcripts: Record<string, unknown>[] = json?.data?.transcripts || [];
+
+  // Match: closer email in participants + inscrito email in participants (preferred)
+  // Fallback: closer email only (if inscrito didn't use the same email)
+  const norm = (e: string) => e.toLowerCase().trim();
+  const closerNorm = norm(closerEmail);
+  const partNorm = norm(participantEmail);
+
+  const withBoth = transcripts.find((t) => {
+    const parts = (t.participants as string[] || []).map(norm);
+    return parts.includes(closerNorm) && parts.includes(partNorm);
+  });
+  if (withBoth) return withBoth;
+
+  // Fallback: closer-only match, closest in time
+  const withCloser = transcripts
+    .filter((t) => (t.participants as string[] || []).map(norm).includes(closerNorm))
+    .sort((a, b) => {
+      const dA = Math.abs(new Date(a.dateString as string).getTime() - sessionDate.getTime());
+      const dB = Math.abs(new Date(b.dateString as string).getTime() - sessionDate.getTime());
+      return dA - dB;
+    });
+  return withCloser[0] || null;
+}
+
+function buildTranscriptNote(transcript: Record<string, unknown>, leadName: string): string {
+  const summary = transcript.summary as Record<string, unknown> | null;
+  const title = transcript.title || "Reunião";
+  const duration = transcript.duration ? `${Math.round(transcript.duration as number)} min` : "—";
+  const dateStr = new Date(transcript.dateString as string).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const overview = (summary?.overview as string) || "";
+  const shortSummary = (summary?.short_summary as string) || "";
+  const actionItems = (summary?.action_items as string) || "";
+  const keywords = (summary?.keywords as string[] | string) || "";
+  const kwStr = Array.isArray(keywords) ? keywords.join(", ") : keywords;
+
+  const htmlOverview = overview.replace(/\n/g, "<br/>");
+  const htmlActions = actionItems.replace(/\n/g, "<br/>");
+
+  return `<h3>🎙️ Resumo da Reunião — ${title}</h3>
+<p><strong>Inscrito:</strong> ${leadName}</p>
+<p><strong>Data:</strong> ${dateStr} · <strong>Duração:</strong> ${duration}</p>
+${kwStr ? `<p><strong>Palavras-chave:</strong> ${kwStr}</p>` : ""}
+<hr/>
+${shortSummary ? `<p><strong>Resumo:</strong> ${shortSummary}</p>` : ""}
+${overview ? `<p><strong>Pontos principais:</strong></p><p>${htmlOverview}</p>` : ""}
+${actionItems ? `<hr/><p><strong>Ações acordadas:</strong></p><p>${htmlActions}</p>` : ""}
+<hr/><p style="font-size:11px;color:#777;">Fonte: Fireflies (transcript ${transcript.id})</p>`;
+}
+
+// ── Pipedrive helpers ─────────────────────────────────────────────────────────
+
+const PIPEDRIVE_DOMAIN = "seazone-fd92b9";
+const SZS_PIPELINE_ID = 14;
+const SZS_STAGE_REUNIAO_REALIZADA = 151;
+
+function extractDealId(dealUrl: string | null | undefined): number | null {
+  if (!dealUrl) return null;
+  const match = dealUrl.match(/\/deal\/(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+async function pipedriveMoveDealStage(dealId: number): Promise<{ ok: boolean; error?: string; moved?: boolean; pipeline_id?: number }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  try {
+    // Fetch deal to check pipeline
+    const dealResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`);
+    if (!dealResp.ok) return { ok: false, error: `Fetch deal failed: ${dealResp.status}` };
+    const dealData = await dealResp.json();
+    const pipelineId = dealData?.data?.pipeline_id;
+    if (pipelineId !== SZS_PIPELINE_ID) {
+      return { ok: true, moved: false, pipeline_id: pipelineId };
+    }
+    // Update stage
+    const updateResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage_id: SZS_STAGE_REUNIAO_REALIZADA }),
+    });
+    if (!updateResp.ok) {
+      const err = await updateResp.text();
+      return { ok: false, error: `Update stage failed: ${updateResp.status} ${err}` };
+    }
+    return { ok: true, moved: true, pipeline_id: pipelineId };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+const SZS_STAGE_AGENDADO = 73;
+
+async function pipedriveFindUserByEmail(email: string): Promise<number | null> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return null;
+  const resp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/users?api_token=${token}`);
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const users = (data?.data || []) as Array<{ id: number; email: string }>;
+  const match = users.find((u) => (u.email || "").toLowerCase() === email.toLowerCase());
+  return match?.id ?? null;
+}
+
+async function pipedriveFindOrCreatePerson(name: string, email: string, phone: string): Promise<{ ok: boolean; person_id?: number; error?: string }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  // Try to find existing person by email
+  const searchResp = await fetch(
+    `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/persons/search?term=${encodeURIComponent(email)}&fields=email&exact_match=true&api_token=${token}`
+  );
+  if (searchResp.ok) {
+    const searchData = await searchResp.json();
+    const items = (searchData?.data?.items || []) as Array<{ item: { id: number } }>;
+    if (items.length > 0) return { ok: true, person_id: items[0].item.id };
+  }
+  // Create new
+  const createResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/persons?api_token=${token}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      email: [{ value: email, primary: true, label: "work" }],
+      phone: phone ? [{ value: phone, primary: true, label: "work" }] : undefined,
+    }),
+  });
+  if (!createResp.ok) {
+    return { ok: false, error: `Create person failed: ${createResp.status} ${await createResp.text()}` };
+  }
+  const created = await createResp.json();
+  return { ok: true, person_id: created?.data?.id };
+}
+
+async function pipedriveCreateWebinarDeal(
+  title: string,
+  personId: number,
+  ownerId: number,
+): Promise<{ ok: boolean; deal_id?: number; deal_url?: string; error?: string }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  const resp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals?api_token=${token}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      person_id: personId,
+      user_id: ownerId,
+      pipeline_id: SZS_PIPELINE_ID,
+      stage_id: SZS_STAGE_AGENDADO,
+      status: "open",
+    }),
+  });
+  if (!resp.ok) {
+    return { ok: false, error: `Create deal failed: ${resp.status} ${await resp.text()}` };
+  }
+  const data = await resp.json();
+  const dealId = data?.data?.id;
+  return {
+    ok: true,
+    deal_id: dealId,
+    deal_url: `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/deal/${dealId}`,
+  };
+}
+
+async function pipedriveCreateNote(dealId: number, content: string): Promise<{ ok: boolean; error?: string; note_id?: number }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  try {
+    const resp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/notes?api_token=${token}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deal_id: dealId, content }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      return { ok: false, error: `Create note failed: ${resp.status} ${err}` };
+    }
+    const data = await resp.json();
+    return { ok: true, note_id: data?.data?.id };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -1159,6 +2168,85 @@ Deno.serve(async (req: Request) => {
     if (resource === "messages") return await handleMessages(method, rest, req);
     if (resource === "admin") return await handleAdmin(method, rest, req);
     if (resource === "internal" && rest[0] === "send-reminders") return await handleInternalReminders(req);
+    if (resource === "internal" && rest[0] === "migrate-007") {
+      const dbUrl = Deno.env.get("SUPABASE_DB_URL");
+      if (!dbUrl) return json({ error: "SUPABASE_DB_URL not set" }, 500);
+      const { Client } = await import("https://deno.land/x/postgres@v0.19.3/mod.ts");
+      const client = new Client(dbUrl);
+      await client.connect();
+      const statements = [
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS fireflies_transcript_id text`,
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS transcript_summary text`,
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS transcript_synced_at timestamptz`,
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS pipedrive_transcript_note_id bigint`,
+      ];
+      const results: Array<{ sql: string; ok: boolean; error?: string }> = [];
+      for (const sql of statements) {
+        try {
+          await client.queryObject(sql);
+          results.push({ sql, ok: true });
+        } catch (err) {
+          results.push({ sql, ok: false, error: (err as Error).message });
+        }
+      }
+      await client.end();
+      return json({ results });
+    }
+    if (resource === "internal" && rest[0] === "migrate-006") {
+      const dbUrl = Deno.env.get("SUPABASE_DB_URL");
+      if (!dbUrl) return json({ error: "SUPABASE_DB_URL not set" }, 500);
+      const { Client } = await import("https://deno.land/x/postgres@v0.19.3/mod.ts");
+      const client = new Client(dbUrl);
+      await client.connect();
+      const statements = [
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS is_opportunity boolean`,
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS opportunity_marked_at timestamptz`,
+      ];
+      const results: Array<{ sql: string; ok: boolean; error?: string }> = [];
+      for (const sql of statements) {
+        try {
+          await client.queryObject(sql);
+          results.push({ sql, ok: true });
+        } catch (err) {
+          results.push({ sql, ok: false, error: (err as Error).message });
+        }
+      }
+      await client.end();
+      return json({ results });
+    }
+    if (resource === "internal" && rest[0] === "migrate-008") {
+      const dbUrl = Deno.env.get("SUPABASE_DB_URL");
+      if (!dbUrl) return json({ error: "SUPABASE_DB_URL not set" }, 500);
+      const { Client } = await import("https://deno.land/x/postgres@v0.19.3/mod.ts");
+      const client = new Client(dbUrl);
+      await client.connect();
+      const statements = [
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS cidade text`,
+        `ALTER TABLE webinar_registrations ADD COLUMN IF NOT EXISTS tipo_imovel text`,
+      ];
+      const results: Array<{ sql: string; ok: boolean; error?: string }> = [];
+      for (const sql of statements) {
+        try {
+          await client.queryObject(sql);
+          results.push({ sql, ok: true });
+        } catch (err) {
+          results.push({ sql, ok: false, error: (err as Error).message });
+        }
+      }
+      await client.end();
+      return json({ results });
+    }
+    if (resource === "internal" && rest[0] === "test-email") {
+      const data = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const to = (data.to as string) || "";
+      if (!to) return json({ error: "Campo 'to' obrigatório" }, 400);
+      try {
+        await sendEmail("Seazone", to, "Teste de email — Webinar Platform", "<p>Se você recebeu este email, o envio está funcionando.</p>");
+        return json({ ok: true, sent_to: to });
+      } catch (err) {
+        return json({ ok: false, error: (err as Error).message }, 500);
+      }
+    }
     if (resource === "pipedrive" && rest[0] === "lookup") return await handlePipedriveLookup(req);
 
     return json({ error: "Not found" }, 404);
