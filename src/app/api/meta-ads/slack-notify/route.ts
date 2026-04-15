@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const SLACK_WEBHOOK = process.env.SLACK_WEBHOOK_URL || ""
-const SLACK_TAG_USER = "U0A0AFJQ3GV"
+const SLACK_WEBHOOK = process.env.SLACK_WEBHOOK_PAUSA_URL
+const SLACK_TAG_USERS = ["U0ADJGTD198", "U0ABY7KQ6J1"]
 
 interface PausedAd {
   ad_id: string
@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
       day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
     })
 
-    let text = `:pause_button: *Anúncios pausados — ${date}*\n<@${SLACK_TAG_USER}>\n\n`
+    let text = `:pause_button: *Anúncios pausados — ${date}*\n${SLACK_TAG_USERS.map(u => `<@${u}>`).join(" ")}\n\n`
     text += `*${ads.length} anúncio${ads.length > 1 ? "s" : ""} pausado${ads.length > 1 ? "s" : ""}*\n\n`
 
     for (const [vertical, vAds] of Object.entries(groups)) {
