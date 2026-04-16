@@ -340,13 +340,13 @@ function ChannelCard({ channel, historyDays }: { channel: ChannelResult; history
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Aguardando Dados</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: "#fbbf24" }}>{fmtNum(snapshots.aguardandoDados)}</div>
-          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>deals na etapa</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: "#fbbf24" }}>{fmtNum(name === "Geral" ? (snapshots.agDadosAccum ?? snapshots.aguardandoDados) : snapshots.aguardandoDados)}</div>
+          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{name === "Geral" ? "acumulado no mês" : "em aberto"}</div>
         </div>
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Em Contrato</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: "#22c55e" }}>{fmtNum(snapshots.emContrato)}</div>
-          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>deals na etapa</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: "#22c55e" }}>{fmtNum(name === "Geral" ? (snapshots.contratoAccum ?? snapshots.emContrato) : snapshots.emContrato)}</div>
+          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{name === "Geral" ? "acumulado no mês" : "em aberto"}</div>
         </div>
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center", position: "relative" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>

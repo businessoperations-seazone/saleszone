@@ -262,7 +262,7 @@ function ChannelCard({ channel, historyDays }: { channel: GeralChannelResult; hi
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: isGeral ? "1fr 1fr" : "1fr 1fr 1fr", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isGeral ? `repeat(${3 + (noShow ? 1 : 0)}, 1fr)` : `repeat(${3 + (noShow ? 1 : 0)}, 1fr)`, gap: 10 }}>
         {isGeral && reservaHistory ? (
           <>
             <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
@@ -279,6 +279,22 @@ function ChannelCard({ channel, historyDays }: { channel: GeralChannelResult; hi
               </div>
               <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>acumulado</div>
             </div>
+            <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Ocupação Agenda</div>
+              <div style={{ fontSize: 28, fontWeight: 700, color: "#60a5fa" }}>
+                {ocupacaoAgenda ? ocupacaoAgenda.percent.toFixed(1) : "—"}<span style={{ fontSize: 14 }}>%</span>
+              </div>
+              <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{ocupacaoAgenda ? `${ocupacaoAgenda.agendadas}/${ocupacaoAgenda.capacidade} slots (7d)` : "sem dados"}</div>
+            </div>
+            {noShow && (
+              <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
+                <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>No-Show</div>
+                <div style={{ fontSize: 28, fontWeight: 700, color: noShow.percent > 20 ? "#ef4444" : noShow.percent > 10 ? "#f59e0b" : "#22c55e" }}>
+                  {noShow.percent.toFixed(1)}<span style={{ fontSize: 14 }}>%</span>
+                </div>
+                <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{noShow.canceladas}/{noShow.total} reuniões (7d)</div>
+              </div>
+            )}
           </>
         ) : snapshots ? (
           <>

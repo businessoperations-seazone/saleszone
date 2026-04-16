@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
 import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
+import { getModuleConfig } from "@/lib/modules";
 
 /* ── Macro-channel mapping ────────────────────────────────── */
 const MACRO_CHANNELS: Record<string, string> = {
@@ -77,21 +78,36 @@ const SZS_RESULTADOS_METAS: Record<string, Record<string, ChannelMetas>> = {
   },
 };
 
-const CHANNEL_CLOSERS: Record<string, string[]> = {
-  Geral: ["Gabriela Lemos", "Gabriela Branco", "Giovanna Araujo Zanchetta", "Maria Amaral", "Samuel Barreto"],
-  "Vendas Diretas": ["Gabriela Lemos", "Maria Amaral"],
-  Parceiros: ["Gabriela Branco"],
-  "Expansão": ["Giovanna Araujo Zanchetta", "Samuel Barreto"],
+/* ── Closer names → channel tabs (used to build email map dynamically) ── */
+const CLOSER_CHANNEL_MAP: Record<string, string[]> = {
+  "Gabi Lemos":         ["Geral", "Vendas Diretas"],
+  "Gabriela Branco":    ["Geral", "Parceiros"],
+  "Giovanna Zanchetta": ["Geral", "Expansão"],
 };
 
-/* ── Closer email → tabs (for calendar events) ──────────── */
-const CLOSER_EMAIL_CHANNEL: Record<string, string[]> = {
-  "maria.amaral@seazone.com.br":          ["Geral", "Vendas Diretas"],
-  "gabriela.lemos@seazone.com.br":        ["Geral", "Vendas Diretas"],
-  "gabriela.branco@seazone.com.br":       ["Geral", "Parceiros"],
-  "giovanna.araujo@seazone.com.br":       ["Geral", "Expansão"],
-  "samuel.barreto@seazone.com.br":        ["Geral", "Expansão"],
-};
+const mc = getModuleConfig("szs");
+
+/* ── Build email→tabs map from squad_closer_rules, filtered by mc.closers ── */
+function closerNorm(s: string) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+const configClosers = mc.closers.map(closerNorm); // ["gabi lemos", "gabriela branco", "giovanna zanchetta"]
+
+function buildEmailChannelMap(rules: { email: string }[]): Record<string, string[]> {
+  const map: Record<string, string[]> = {};
+  for (const r of rules) {
+    const prefix = r.email.split("@")[0].replace(".", " "); // e.g. "gabriela lemos"
+    const matchedConfig = mc.closers.find((c) => {
+      const cn = closerNorm(c);
+      const pn = closerNorm(prefix);
+      return cn.includes(pn) || pn.includes(cn.split(" ")[0]);
+    });
+    if (!matchedConfig) continue; // dismissed closer — skip
+    const tabs = CLOSER_CHANNEL_MAP[matchedConfig] || ["Geral"];
+    map[r.email] = tabs;
+  }
+  return map;
+}
 
 const MEETINGS_PER_DAY = 16;
 const WORK_DAYS_PER_WEEK = 5;
@@ -148,6 +164,19 @@ export async function GET(request: NextRequest) {
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
     const startDate = `${monthKey}-01`;
 
+    // ── Fetch active closer emails from squad_closer_rules (same logic as szs/ociosidade) ──
+    const { data: closerRules } = await admin
+      .from("squad_closer_rules")
+      .select("email")
+      .in("setor", ["SZS", "Expansao"]);
+    const closerEmailChannelMap = buildEmailChannelMap(closerRules || []);
+    const activeCloserEmails = Object.keys(closerEmailChannelMap);
+    // Build per-channel closer counts for capacity calculation
+    const channelCloserCount: Record<string, number> = { Geral: 0, "Vendas Diretas": 0, Parceiros: 0, "Expansão": 0 };
+    for (const tabs of Object.values(closerEmailChannelMap)) {
+      for (const tab of tabs) channelCloserCount[tab] = (channelCloserCount[tab] || 0) + 1;
+    }
+
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
     const prevStart = `${prevKey}-01`;
@@ -193,6 +222,34 @@ export async function GET(request: NextRequest) {
     const metaRows = await paginate((o, ps) =>
       admin.from("szs_meta_ads").select("ad_id, spend_month").gte("snapshot_date", startDate).range(o, o + ps - 1)
     );
+
+    // ── Orçamento do mês de szs_orcamento ──
+    const { data: orcData } = await admin
+      .from("szs_orcamento")
+      .select("orcamento_total")
+      .eq("mes", monthKey)
+      .maybeSingle();
+    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Fallback 1: soma dos budgets aprovados por empreendimento
+    if (!orcamentoMeta) {
+      const { data: approvedRows } = await admin
+        .from("szs_orcamento_approved")
+        .select("budget_recomendado")
+        .eq("mes", monthKey);
+      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
+    }
+    // Fallback 2: mês mais recente disponível em szs_orcamento
+    if (!orcamentoMeta) {
+      const { data: prevOrc } = await admin
+        .from("szs_orcamento")
+        .select("orcamento_total")
+        .lt("mes", monthKey)
+        .order("mes", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+    }
     // Dedup: max spend_month per ad_id (multiple snapshots in the month)
     const adSpend = new Map<string, number>();
     for (const r of metaRows) {
@@ -218,23 +275,27 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    // Snapshots de Ag.Dados e Contrato direto de szs_deals (sempre atualizado, filtrável por cidade e canal)
+    // Snapshots de Ag.Dados e Contrato de szs_open_snapshots (cobre todos os canais, incluindo Parceiros e Expansão)
+    // szs_deals exclui canais 582/583/1748/3189, por isso não serve para sub-canais
     {
-      const snapDeals = await paginate((o, ps) =>
-        admin.from("szs_deals")
-          .select("stage_id, empreendimento, canal")
-          .eq("status", "open")
-          .in("stage_id", [152, 76])
-          .range(o, o + ps - 1),
-      );
-      console.log(`[szs-resultados] snapDeals (stage 152/76): ${snapDeals.length} deals, cityFilter=${cityFilter}`);
-      for (const d of snapDeals) {
-        if (cityFilter && getCidadeGroup(d.empreendimento || "") !== cityFilter) continue;
-        const canalGroup = getCanalGroup(d.canal || "");
-        const tabs = getChannelTabs(canalGroup);
+      // Busca a data mais recente disponível (sync pode não ter rodado hoje)
+      const { data: latestRow } = await admin
+        .from("szs_open_snapshots")
+        .select("date")
+        .order("date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const snapDate = latestRow?.date || todayStr;
+      const { data: openSnaps } = await admin
+        .from("szs_open_snapshots")
+        .select("canal_group, ag_dados, contrato")
+        .eq("date", snapDate);
+      console.log(`[szs-resultados] szs_open_snapshots: ${(openSnaps || []).length} rows for ${snapDate}`);
+      for (const s of openSnaps || []) {
+        const tabs = getChannelTabs(s.canal_group || "");
         for (const tab of tabs) {
-          if (d.stage_id === 152) snapshots[tab].agDados++;
-          if (d.stage_id === 76)  snapshots[tab].contrato++;
+          snapshots[tab].agDados += s.ag_dados || 0;
+          snapshots[tab].contrato += s.contrato || 0;
         }
       }
     }
@@ -377,17 +438,23 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Google Calendar: count meetings scheduled in next 7 days per closer
+    // Google Calendar: count meetings scheduled in next 7 working days per closer
     const today = now.toISOString().substring(0, 10);
     const next7 = new Date(now);
     next7.setDate(next7.getDate() + 6);
     const next7Str = next7.toISOString().substring(0, 10);
-    const calendarRows = await paginate((o, ps) =>
-      admin.from("szs_calendar_events").select("closer_email, empreendimento").gte("dia", today).lte("dia", next7Str).eq("cancelou", false).range(o, o + ps - 1)
-    );
+    const calendarRows = activeCloserEmails.length > 0
+      ? await paginate((o, ps) =>
+          admin.from("szs_calendar_events")
+            .select("closer_email, empreendimento")
+            .in("closer_email", activeCloserEmails)
+            .gte("dia", today).lte("dia", next7Str).eq("cancelou", false)
+            .range(o, o + ps - 1)
+        )
+      : [];
     for (const ev of calendarRows) {
       if (cityFilter && getCidadeGroup(ev.empreendimento || "") !== cityFilter) continue;
-      const tabs = CLOSER_EMAIL_CHANNEL[ev.closer_email] || [];
+      const tabs = closerEmailChannelMap[ev.closer_email] || [];
       for (const tab of tabs) snapshots[tab].agendado++;
     }
 
@@ -395,14 +462,20 @@ export async function GET(request: NextRequest) {
     const past7 = new Date(now);
     past7.setDate(past7.getDate() - 6);
     const past7Str = past7.toISOString().substring(0, 10);
-    const noShowRows = await paginate((o, ps) =>
-      admin.from("szs_calendar_events").select("closer_email, cancelou, empreendimento").gte("dia", past7Str).lte("dia", today).range(o, o + ps - 1)
-    );
+    const noShowRows = activeCloserEmails.length > 0
+      ? await paginate((o, ps) =>
+          admin.from("szs_calendar_events")
+            .select("closer_email, cancelou, empreendimento")
+            .in("closer_email", activeCloserEmails)
+            .gte("dia", past7Str).lte("dia", today)
+            .range(o, o + ps - 1)
+        )
+      : [];
     const noShowData: Record<string, { canceladas: number; total: number }> = {};
     for (const ch of CHANNEL_ORDER) noShowData[ch] = { canceladas: 0, total: 0 };
     for (const ev of noShowRows) {
       if (cityFilter && getCidadeGroup(ev.empreendimento || "") !== cityFilter) continue;
-      const tabs = CLOSER_EMAIL_CHANNEL[ev.closer_email] || [];
+      const tabs = closerEmailChannelMap[ev.closer_email] || [];
       for (const tab of tabs) {
         noShowData[tab].total++;
         if (ev.cancelou) noShowData[tab].canceladas++;
@@ -439,8 +512,11 @@ export async function GET(request: NextRequest) {
       const counts = channelCounts[name] || {};
       const meta = metas[name] || { mql: 0, sql: 0, opp: 0, won: 0 };
       const snap = snapshots[name];
-      const closers = CHANNEL_CLOSERS[name] || [];
-      const capacity = closers.length * MEETINGS_PER_DAY * WORK_DAYS_PER_WEEK;
+      const nClosers = channelCloserCount[name] || 0;
+      const capacity = nClosers * MEETINGS_PER_DAY * WORK_DAYS_PER_WEEK;
+      const closers = Object.entries(closerEmailChannelMap)
+        .filter(([, tabs]) => tabs.includes(name))
+        .map(([email]) => email.split("@")[0].replace(".", " "));
 
       const metrics: ChannelResult["metrics"] = {
         mql: { real: counts.mql || 0, meta: meta.mql },
@@ -448,7 +524,7 @@ export async function GET(request: NextRequest) {
         opp: { real: counts.opp || 0, meta: meta.opp },
         won: { real: counts.won || 0, meta: meta.won },
       };
-      if (meta.orcamento != null) metrics.orcamento = { real: Math.round(totalSpend), meta: meta.orcamento };
+      if (name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       if (meta.leads != null) metrics.leads = { real: counts.mql || 0, meta: meta.leads };
 
       // Charts use delta-computed history from szs_deals
@@ -469,7 +545,11 @@ export async function GET(request: NextRequest) {
               agDadosMeta: meta.agDados,
               contratoMeta: meta.contrato,
             }
-          : { aguardandoDados: snap.agDados, emContrato: snap.contrato, totalOpen: snap.totalOpen },
+          : {
+              aguardandoDados: snap.agDados,
+              emContrato: snap.contrato,
+              totalOpen: snap.totalOpen,
+            },
         ocupacaoAgenda: {
           agendadas: snap.agendado,
           capacidade: capacity,

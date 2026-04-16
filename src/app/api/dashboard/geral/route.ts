@@ -420,13 +420,13 @@ export async function GET(req: NextRequest) {
     // Dynamic: read closer emails from squad_closer_rules
     const { data: closerRules } = await admin.from("squad_closer_rules").select("email").eq("setor", "SZI");
     const CLOSER_EMAILS = (closerRules || []).map((r: { email: string }) => r.email);
-    const MEETINGS_PER_DAY = 8;
+    const MEETINGS_PER_DAY = 16;
     const WORK_DAYS = 5;
 
-    // Vendas Diretas: closers de V_COLS, 14 slots/dia
+    // Vendas Diretas: closers de V_COLS
     const { data: vdCloserRules } = await admin.from("squad_closer_rules").select("email").in("prefixo", ["Apresentação"]).eq("setor", "SZI");
     const VD_CLOSER_EMAILS = (vdCloserRules || []).map((r: { email: string }) => r.email);
-    const VD_SLOTS_PER_DAY = 14;
+    const VD_SLOTS_PER_DAY = 16;
     const next7 = new Date(now); next7.setDate(next7.getDate() + 6);
     const next7Str = next7.toISOString().substring(0, 10);
     const past7 = new Date(now); past7.setDate(past7.getDate() - 6);
@@ -493,9 +493,9 @@ export async function GET(req: NextRequest) {
 
       // All channels get snapshots
       result.snapshots = snap;
+      result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
       if (name === "Geral") {
         result.ocupacaoAgenda = { agendadas, capacidade, percent: agendaPct };
-        result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
       }
       if (name === "Vendas Diretas") {
         result.ocupacaoAgenda = { agendadas: vdAgendadas, capacidade: vdCapacidade, percent: vdAgendaPct };

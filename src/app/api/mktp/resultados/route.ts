@@ -208,6 +208,34 @@ export async function GET() {
       admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
     );
 
+    /* ── 4a. Orçamento do mês de mktp_orcamento ── */
+    const { data: orcData } = await admin
+      .from("mktp_orcamento")
+      .select("orcamento_total")
+      .eq("mes", monthKey)
+      .maybeSingle();
+    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Fallback 1: soma dos budgets aprovados por empreendimento
+    if (!orcamentoMeta) {
+      const { data: approvedRows } = await admin
+        .from("mktp_orcamento_approved")
+        .select("budget_recomendado")
+        .eq("mes", monthKey);
+      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
+    }
+    // Fallback 2: mês mais recente disponível em mktp_orcamento
+    if (!orcamentoMeta) {
+      const { data: prevOrc } = await admin
+        .from("mktp_orcamento")
+        .select("orcamento_total")
+        .lt("mes", monthKey)
+        .order("mes", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+    }
+
     /* ── 4b. Metas do mês de mktp_metas (fallback para hardcoded se vazio) ── */
     const { data: mktpMetasRows } = await admin
       .from("mktp_metas").select("tab, meta").eq("month", `${monthKey}-01`);
@@ -243,23 +271,25 @@ export async function GET() {
       .limit(1)
       .maybeSingle();
 
+    // Always fetch per-canal open deals for sub-channel cards (Vendas Diretas, Parcerias)
+    const snapshotDeals = await paginate((o, ps) =>
+      admin.from("mktp_deals").select("stage_id, canal").eq("status", "open").in("stage_id", [STAGE_RESERVA, STAGE_CONTRATO]).range(o, o + ps - 1)
+    );
+    for (const d of snapshotDeals) {
+      const group = getCanalGroup(String(d.canal || ""));
+      if (d.stage_id === STAGE_RESERVA) { snapshots[group].reserva++; snapshots["Funil Completo"].reserva++; }
+      if (d.stage_id === STAGE_CONTRATO) { snapshots[group].contrato++; snapshots["Funil Completo"].contrato++; }
+    }
+
     if (pdSnap) {
+      // Override Funil Completo total with more accurate pipedrive_daily_snapshot
       const byStage = (pdSnap.by_stage || {}) as Record<string, number>;
       snapshots["Funil Completo"].totalOpen = pdSnap.total_open || 0;
       snapshots["Funil Completo"].reserva = byStage["305"] || 0;
       snapshots["Funil Completo"].contrato = byStage["271"] || 0;
       console.log(`[mktp/resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
     } else {
-      console.warn("[mktp/resultados] No pipedrive_daily_snapshot for pipeline 37 — open deal count will be approximate");
-      // Fallback: mktp_deals table
-      const snapshotDeals = await paginate((o, ps) =>
-        admin.from("mktp_deals").select("stage_id, canal").eq("status", "open").in("stage_id", [STAGE_RESERVA, STAGE_CONTRATO]).range(o, o + ps - 1)
-      );
-      for (const d of snapshotDeals) {
-        const group = getCanalGroup(String(d.canal || ""));
-        if (d.stage_id === STAGE_RESERVA) { snapshots[group].reserva++; snapshots["Funil Completo"].reserva++; }
-        if (d.stage_id === STAGE_CONTRATO) { snapshots[group].contrato++; snapshots["Funil Completo"].contrato++; }
-      }
+      console.warn("[mktp/resultados] No pipedrive_daily_snapshot for pipeline 37 — Funil Completo total is sum from mktp_deals");
     }
 
     /* ── 5b. Ocupação agenda (mktp_calendar_events, próximos 7 dias) ── */
@@ -436,8 +466,8 @@ export async function GET() {
         won: { real: counts.won || 0, meta: meta.won },
       };
 
-      if (meta.orcamento != null) {
-        metrics.orcamento = { real: Math.round(totalSpend), meta: meta.orcamento };
+      if (name === "Vendas Diretas") {
+        metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       }
       if (meta.leads != null) {
         metrics.leads = { real: counts.mql || 0, meta: meta.leads };
@@ -456,7 +486,10 @@ export async function GET() {
         filterDescription: CHANNEL_FILTERS[name],
         metrics,
         lastMonthWon: prevWon[name] || 0,
-        snapshots: { aguardandoDados: snap.reserva, emContrato: snap.contrato },
+        snapshots: {
+          aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
+          emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
+        },
         ocupacaoAgenda: { agendadas: totalAgendadas, capacidade: totalCapacity, percent: agendaPct },
         noShow: { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
         dealsHistory,
