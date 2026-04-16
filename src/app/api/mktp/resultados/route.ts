@@ -292,26 +292,31 @@ export async function GET() {
       console.warn("[mktp/resultados] No pipedrive_daily_snapshot for pipeline 37 — Funil Completo total is sum from mktp_deals");
     }
 
-    /* ── 5b. Ocupação agenda (mktp_calendar_events, próximos 7 dias) ── */
-    const next7 = new Date(now);
-    next7.setDate(next7.getDate() + 7);
-    const next7Date = next7.toISOString().substring(0, 10);
-
-    const calendarEvents = await paginate((o, ps) =>
-      admin
-        .from("mktp_calendar_events")
-        .select("closer_name")
-        .gte("dia", today)
-        .lte("dia", next7Date)
-        .eq("cancelou", false)
-        .range(o, o + ps - 1)
-    );
-
-    const CLOSERS = ["Nevine Saratt", "Willian Miranda"];
+    /* ── 5b. Ocupação agenda — deals abertos no stage Agendado (284) do pipeline 37 ── */
+    const { data: mktpCloserRules } = await admin
+      .from("squad_closer_rules")
+      .select("email")
+      .eq("setor", "MKTP");
+    const MKTP_CLOSER_COUNT = (mktpCloserRules || []).length;
     const MEETINGS_PER_DAY = 16;
     const WORK_DAYS = 5;
-    const totalCapacity = CLOSERS.length * MEETINGS_PER_DAY * WORK_DAYS;
-    const totalAgendadas = calendarEvents.length;
+    const totalCapacity = MKTP_CLOSER_COUNT * MEETINGS_PER_DAY * WORK_DAYS;
+
+    const STAGE_AGENDADO_MKTP = 284;
+    const agendadosMktp = await paginate((o, ps) =>
+      admin.from("mktp_deals").select("canal")
+        .eq("status", "open").eq("stage_id", STAGE_AGENDADO_MKTP).range(o, o + ps - 1)
+    );
+
+    const agendaByChannelMktp: Record<string, number> = { "Funil Completo": 0, "Vendas Diretas": 0, Parcerias: 0 };
+    for (const d of agendadosMktp) {
+      const group = getCanalGroup(String(d.canal || ""));
+      agendaByChannelMktp["Funil Completo"]++;
+      if (group === "Parcerias") agendaByChannelMktp["Parcerias"]++;
+      else agendaByChannelMktp["Vendas Diretas"]++;
+    }
+
+    const totalAgendadas = agendaByChannelMktp["Funil Completo"];
     const agendaPct = totalCapacity > 0 ? Math.round((totalAgendadas / totalCapacity) * 1000) / 10 : 0;
 
     /* ── 5c. No-show (últimos 7 dias de mktp_calendar_events) ── */
@@ -490,7 +495,7 @@ export async function GET() {
           aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
           emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
         },
-        ocupacaoAgenda: { agendadas: totalAgendadas, capacidade: totalCapacity, percent: agendaPct },
+        ocupacaoAgenda: { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
         noShow: { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
         dealsHistory,
       };
