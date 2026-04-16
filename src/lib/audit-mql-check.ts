@@ -7,8 +7,9 @@ const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 const SLACK_WEBHOOK    = process.env.SLACK_WEBHOOK_AUDIT_MQL    || ""
 
-const FIVE_MINUTES = 5 * 60 * 1000
-const FOUR_HOURS   = 4 * 60 * 60 * 1000
+const FIVE_MINUTES      = 5  * 60 * 1000
+const FOUR_HOURS        = 4  * 60 * 60 * 1000
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
 
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
 
@@ -392,10 +393,17 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
       if (l.status === "descartado") return false
       // Aguardando: checa após 5 min (webhook já esperou 7min, GH Actions é o fallback)
       if (l.status === "aguardando" && now - new Date(l.created_at).getTime() > FIVE_MINUTES) return true
-      // Sem MIA: re-checa por até 4h desde a criação (janela fixa — não renova a cada check)
-      if (l.status === "sem_mia" && now - new Date(l.created_at).getTime() < FOUR_HOURS) return true
-      // Sem Pipedrive: re-checa por até 4h — Pipedrive tem lag de indexação, deal pode aparecer depois
-      if (l.status === "sem_pipedrive" && now - new Date(l.created_at).getTime() < FOUR_HOURS) return true
+      // Erro em qualquer nível (Pipedrive, MIA, Baserow): re-checa a cada 4h por até 24h
+      const hasUnresolvedProblem =
+        l.status === "sem_pipedrive" ||
+        l.status === "sem_mia" ||
+        (l.in_baserow === false && l.created_at >= BASEROW_START)
+      if (hasUnresolvedProblem) {
+        const age = now - new Date(l.created_at).getTime()
+        if (age > TWENTY_FOUR_HOURS) return false
+        if (!l.checked_at) return true
+        return now - new Date(l.checked_at).getTime() >= FOUR_HOURS
+      }
       return false
     })
 
@@ -411,6 +419,9 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
     let resolved = 0
     for (const lead of batch) {
       lead.checked_at = new Date().toISOString()
+
+      // Lead já OK: problema pendente é só Baserow — enrichBaserow (após o loop) resolve
+      if (lead.status === "ok") continue
 
       // Verificação SLA ANTES de buscar Pipedrive — lead fora do SLA não deveria
       // estar no Pipe, então não faz sentido alertar "sem deal" para ele
