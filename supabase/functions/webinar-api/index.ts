@@ -1463,6 +1463,9 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
         updateData.opportunity_marked_at = new Date().toISOString();
       }
     }
+    if ("no_show_at" in data) {
+      updateData.no_show_at = data.no_show_at ? new Date().toISOString() : null;
+    }
     if (Object.keys(updateData).length === 0) return json({ error: "Nenhum campo para atualizar" }, 400);
 
     const { data: updated, error } = await supabase
@@ -1483,6 +1486,12 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
         const stageResult = await pipedriveMoveDealStage(dealId);
         pipedriveResults.stage_move = stageResult;
         console.log(`[webinar-api] Pipedrive move stage for deal ${dealId}:`, stageResult);
+      }
+      // Move to No Show stage if marked as no-show (and wasn't before)
+      if ("no_show_at" in data && data.no_show_at && !reg.no_show_at) {
+        const noShowResult = await pipedriveMoveDealToNoShow(dealId);
+        pipedriveResults.no_show_move = noShowResult;
+        console.log(`[webinar-api] Pipedrive move to No Show for deal ${dealId}:`, noShowResult);
       }
       // Create note if observacoes was set/changed and not empty
       if ("observacoes" in data && data.observacoes && data.observacoes !== reg.observacoes) {

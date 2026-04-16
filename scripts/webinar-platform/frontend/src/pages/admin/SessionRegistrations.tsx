@@ -144,6 +144,7 @@ export default function SessionRegistrations() {
   const [savingObs, setSavingObs] = useState<string | null>(null);
   const [savingOpp, setSavingOpp] = useState<string | null>(null);
   const [syncingTranscript, setSyncingTranscript] = useState<string | null>(null);
+  const [markingNoShow, setMarkingNoShow] = useState<string | null>(null);
   const [markingNoShows, setMarkingNoShows] = useState(false);
 
   const load = useCallback(async () => {
@@ -224,6 +225,29 @@ export default function SessionRegistrations() {
       setError(e instanceof Error ? e.message : "Erro ao marcar oportunidade");
     } finally {
       setSavingOpp(null);
+    }
+  }
+
+  async function handleMarkNoShow(regId: string) {
+    if (!confirm("Marcar como Não Compareceu e mover o deal para No Show no Pipedrive?")) return;
+    setMarkingNoShow(regId);
+    setError(null);
+    try {
+      const result = await api.admin.updateRegistration(regId, { no_show_at: true }) as Registration & { _pipedrive?: { no_show_move?: { ok: boolean; moved?: boolean; pipeline_id?: number; error?: string } } };
+      setData((prev) => prev ? {
+        ...prev,
+        registrations: prev.registrations.map((r) => r.id === regId ? { ...r, no_show_at: new Date().toISOString() } : r),
+      } : prev);
+      const pd = result._pipedrive?.no_show_move;
+      if (pd?.moved) {
+        alert("Deal movido para 'No Show' no Pipedrive.");
+      } else if (pd && !pd.ok) {
+        alert(`Marcado como No Show, mas erro no Pipedrive: ${pd.error}`);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao marcar No Show");
+    } finally {
+      setMarkingNoShow(null);
     }
   }
 
@@ -540,7 +564,19 @@ export default function SessionRegistrations() {
                         {formatDateTime(reg.created_at)}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge reg={reg} />
+                        <div className="flex items-center gap-2">
+                          <StatusBadge reg={reg} />
+                          {getRegStatus(reg) === "Confirmado" && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleMarkNoShow(reg.id); }}
+                              disabled={markingNoShow === reg.id}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                              title="Marcar como Não Compareceu (move deal para No Show no Pipedrive)"
+                            >
+                              {markingNoShow === reg.id ? "..." : "Não compareceu"}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     {/* Expanded row */}
