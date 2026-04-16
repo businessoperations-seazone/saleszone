@@ -110,6 +110,11 @@ export const api = {
         `/admin/registrations/${id}/sync-transcript`,
         { method: "POST" }
       ),
+    markNoShows: (sessionId: string) =>
+      request<{ ok: boolean; marked: number; results: { id: string; name: string; db_ok: boolean; pipedrive?: { ok: boolean; moved?: boolean; error?: string } }[] }>(
+        `/admin/sessions/${sessionId}/mark-no-shows`,
+        { method: "POST" }
+      ),
     getSessionDetails: (sessionId: string) =>
       request<any>(`/admin/sessions/${sessionId}/details`),
     exportCSV: (sessionId?: string) => {

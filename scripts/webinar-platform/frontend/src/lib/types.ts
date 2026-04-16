@@ -55,6 +55,7 @@ export interface Registration {
   confirmed_at: string | null;
   attended_at: string | null;
   cancelled_at: string | null;
+  no_show_at: string | null;
   converted: boolean;
   converted_at: string | null;
   created_at: string;

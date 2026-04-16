@@ -35,6 +35,7 @@ interface Registration {
   pipedrive_transcript_note_id: number | null;
   created_at: string;
   cancelled_at: string | null;
+  no_show_at: string | null;
   attended_at: string | null;
   converted: boolean;
 }
@@ -74,10 +75,11 @@ function formatDateTime(iso: string) {
   return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-type RegStatus = "Confirmado" | "Presente" | "Convertido" | "Cancelado";
+type RegStatus = "Confirmado" | "Presente" | "Convertido" | "Cancelado" | "No Show";
 
 function getRegStatus(reg: Registration): RegStatus {
   if (reg.cancelled_at) return "Cancelado";
+  if (reg.no_show_at) return "No Show";
   if (reg.converted) return "Convertido";
   if (reg.attended_at) return "Presente";
   return "Confirmado";
@@ -90,6 +92,7 @@ function StatusBadge({ reg }: { reg: Registration }) {
     Presente: "bg-green-100 text-green-700 border border-green-200",
     Convertido: "bg-amber-100 text-amber-700 border border-amber-200",
     Cancelado: "bg-gray-100 text-gray-400 border border-gray-200 line-through",
+    "No Show": "bg-red-100 text-red-700 border border-red-200",
   };
   const icons: Record<RegStatus, React.ReactElement> = {
     Confirmado: (
@@ -110,6 +113,11 @@ function StatusBadge({ reg }: { reg: Registration }) {
     Cancelado: (
       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    ),
+    "No Show": (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
       </svg>
     ),
   };
@@ -136,6 +144,7 @@ export default function SessionRegistrations() {
   const [savingObs, setSavingObs] = useState<string | null>(null);
   const [savingOpp, setSavingOpp] = useState<string | null>(null);
   const [syncingTranscript, setSyncingTranscript] = useState<string | null>(null);
+  const [markingNoShows, setMarkingNoShows] = useState(false);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -218,6 +227,32 @@ export default function SessionRegistrations() {
     }
   }
 
+  async function handleMarkNoShows() {
+    if (!sessionId) return;
+    const confirmadoCount = data?.registrations.filter((r) => !r.attended_at && !r.cancelled_at && !r.no_show_at).length ?? 0;
+    if (confirmadoCount === 0) {
+      alert("Nenhum inscrito pendente para marcar como No Show.");
+      return;
+    }
+    if (!confirm(`Marcar ${confirmadoCount} inscrito(s) como No Show e mover os deals para "No Show" no Pipedrive?`)) return;
+    setMarkingNoShows(true);
+    setError(null);
+    try {
+      const result = await api.admin.markNoShows(sessionId);
+      const movedCount = result.results.filter((r) => r.pipedrive?.moved).length;
+      const failedCount = result.results.filter((r) => r.pipedrive && !r.pipedrive.ok).length;
+      let msg = `${result.marked} inscrito(s) marcados como No Show.`;
+      if (movedCount > 0) msg += ` ${movedCount} deal(s) movidos no Pipedrive.`;
+      if (failedCount > 0) msg += ` ${failedCount} erro(s) no Pipedrive.`;
+      alert(msg);
+      await load();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Erro ao marcar No Shows");
+    } finally {
+      setMarkingNoShows(false);
+    }
+  }
+
   function handleSort(key: SortKey) {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -234,7 +269,7 @@ export default function SessionRegistrations() {
       if (sortKey === "name") { valA = a.name.toLowerCase(); valB = b.name.toLowerCase(); }
       if (sortKey === "created_at") { valA = a.created_at; valB = b.created_at; }
       if (sortKey === "status") {
-        const order: Record<RegStatus, number> = { Cancelado: 4, Confirmado: 3, Presente: 2, Convertido: 1 };
+        const order: Record<RegStatus, number> = { Cancelado: 5, "No Show": 4, Confirmado: 3, Presente: 2, Convertido: 1 };
         valA = order[getRegStatus(a)];
         valB = order[getRegStatus(b)];
       }
@@ -277,6 +312,8 @@ export default function SessionRegistrations() {
   const presentCount = registrations.filter((r) => !!r.attended_at && !r.cancelled_at).length;
   const convertedCount = registrations.filter((r) => r.converted && !r.cancelled_at).length;
   const cancelledCount = registrations.filter((r) => !!r.cancelled_at).length;
+  const noShowCount = registrations.filter((r) => !!r.no_show_at && !r.cancelled_at).length;
+  const confirmadoCount = activeRegs.length - presentCount - convertedCount - noShowCount;
 
   const exportUrl = sessionId ? api.admin.exportCSV(sessionId) : null;
 
@@ -323,6 +360,19 @@ export default function SessionRegistrations() {
                 Exportar inscritos
               </a>
             )}
+            {confirmadoCount > 0 && (session.status === "ended" || session.status === "cancelled") && (
+              <button
+                onClick={handleMarkNoShows}
+                disabled={markingNoShows}
+                className="flex items-center gap-1.5 bg-red-600 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-red-700 transition-colors disabled:opacity-50"
+                title={`Marcar ${confirmadoCount} inscrito(s) que não participaram como No Show`}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+                {markingNoShows ? "Marcando..." : `Marcar No Shows (${confirmadoCount})`}
+              </button>
+            )}
             <button
               onClick={load}
               className="flex items-center gap-1.5 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-blue-700 transition-colors"
@@ -337,14 +387,10 @@ export default function SessionRegistrations() {
       </div>
 
       {/* Stats summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
           <p className="text-2xl font-bold text-gray-900">{totalCount}</p>
           <p className="text-xs text-gray-500 mt-0.5 font-medium">Inscritos</p>
-        </div>
-        <div className="bg-white rounded-xl border border-blue-200 p-4 text-center">
-          <p className="text-2xl font-bold text-blue-600">{activeRegs.length}</p>
-          <p className="text-xs text-blue-500 mt-0.5 font-medium">Confirmados</p>
         </div>
         <div className="bg-white rounded-xl border border-green-200 p-4 text-center">
           <p className="text-2xl font-bold text-green-600">{presentCount}</p>
@@ -353,6 +399,14 @@ export default function SessionRegistrations() {
         <div className="bg-white rounded-xl border border-amber-200 p-4 text-center">
           <p className="text-2xl font-bold text-amber-600">{convertedCount}</p>
           <p className="text-xs text-amber-500 mt-0.5 font-medium">Convertidos</p>
+        </div>
+        <div className="bg-white rounded-xl border border-red-200 p-4 text-center">
+          <p className="text-2xl font-bold text-red-600">{noShowCount}</p>
+          <p className="text-xs text-red-500 mt-0.5 font-medium">No Show</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
+          <p className="text-2xl font-bold text-gray-400">{cancelledCount}</p>
+          <p className="text-xs text-gray-400 mt-0.5 font-medium">Cancelados</p>
         </div>
       </div>
 
@@ -386,6 +440,12 @@ export default function SessionRegistrations() {
             <span className="text-green-600 font-medium">{presentCount} presentes</span>
             <span className="text-gray-300">·</span>
             <span className="text-amber-600 font-medium">{convertedCount} convertidos</span>
+            {noShowCount > 0 && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="text-red-600 font-medium">{noShowCount} no show</span>
+              </>
+            )}
             {cancelledCount > 0 && (
               <>
                 <span className="text-gray-300">·</span>
@@ -496,6 +556,12 @@ export default function SessionRegistrations() {
                               <div>
                                 <p className="text-gray-400 font-medium mb-1">Presente em</p>
                                 <p className="text-green-700">{formatDateTime(reg.attended_at)}</p>
+                              </div>
+                            )}
+                            {reg.no_show_at && (
+                              <div>
+                                <p className="text-gray-400 font-medium mb-1">No Show em</p>
+                                <p className="text-red-600">{formatDateTime(reg.no_show_at)}</p>
                               </div>
                             )}
                             {reg.cancelled_at && (
