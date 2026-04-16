@@ -12,8 +12,9 @@ const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 const SLACK_WEBHOOK    = process.env.SLACK_WEBHOOK_AUDIT_MQL    || ""
 
-const TWO_MINUTES = 2  * 60 * 1000
-const FOUR_HOURS  = 4  * 60 * 60 * 1000
+const TWO_MINUTES       = 2  * 60 * 1000
+const FOUR_HOURS        = 4  * 60 * 60 * 1000
+const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
 
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
 
@@ -104,8 +105,17 @@ async function checkPending(leads: LeadRecord[]): Promise<{ leads: LeadRecord[];
   const pending = leads.filter(l => {
     if (l.status === "descartado") return false
     if (l.status === "aguardando" && now - new Date(l.created_at).getTime() > TWO_MINUTES) return true
-    if (l.status === "sem_mia" && l.checked_at && now - new Date(l.checked_at).getTime() < FOUR_HOURS) return true
-    if (l.status === "sem_pipedrive" && l.checked_at && now - new Date(l.checked_at).getTime() < FOUR_HOURS) return true
+    // Erro em qualquer nível (Pipedrive, MIA, Baserow): re-checa a cada 4h por até 24h
+    const hasUnresolvedProblem =
+      l.status === "sem_pipedrive" ||
+      l.status === "sem_mia" ||
+      (l.in_baserow === false && l.created_at >= BASEROW_START)
+    if (hasUnresolvedProblem) {
+      const age = now - new Date(l.created_at).getTime()
+      if (age > TWENTY_FOUR_HOURS) return false
+      if (!l.checked_at) return true
+      return now - new Date(l.checked_at).getTime() >= FOUR_HOURS
+    }
     return false
   })
   if (pending.length === 0) return { leads, changed: false }
@@ -117,6 +127,9 @@ async function checkPending(leads: LeadRecord[]): Promise<{ leads: LeadRecord[];
 
   for (const lead of batch) {
     lead.checked_at = new Date().toISOString()
+
+    // Lead já OK: problema pendente é só Baserow — enrichBaserow resolve
+    if (lead.status === "ok") continue
 
     // SLA antes do Pipedrive — lead fora do SLA não deveria estar no Pipe
     if (slaData) {
@@ -228,9 +241,21 @@ export async function GET(req: NextRequest) {
   const isToday = date === dateKey()
   const baserowChanged = isToday ? await enrichBaserow(updated) : false
   if (changed || baserowChanged || cleared) {
-    await writeLeads(date, updated)
+    // Re-read fresh blob before writing to preserve notified:true set by concurrent runCheck().
+    // Without this, a stale GET snapshot can overwrite notified:true back to undefined,
+    // causing runCheck() to send a duplicate Slack notification on the next cron run.
+    const fresh = await readLeads(date)
+    const freshMap = new Map(fresh.map(l => [l.id, l]))
+    const merged = updated.map(l => {
+      const f = freshMap.get(l.id)
+      if (f?.notified && !l.notified) return { ...l, notified: true }
+      return l
+    })
+    await writeLeads(date, merged)
+    leads = merged
+  } else {
+    leads = updated
   }
-  leads = updated
 
   leads = leads.filter(l => l.status !== "descartado")
   leads.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
