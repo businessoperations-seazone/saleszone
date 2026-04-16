@@ -15,7 +15,10 @@ CONTEXTO DO NEGOCIO SEAZONE:
 A Seazone vende cotas imobiliarias no modelo SPE: o comprador vira socio/dono do imovel. Os empreendimentos sao chamados SPOT (ex: Caraguatuba Spot, Natal Spot, Jurere Spot). Leads chegam via anuncios Click to WhatsApp no Meta Ads e sao abordados pela IA chamada MIA (plataforma Morada.ai). O objetivo da MIA e qualificar o lead e agendar uma reuniao com um vendedor/especialista humano.
 - Horario comercial: segunda a sexta, 09h00 as 18h00. NAO ha atendimento no sabado nem domingo.
 - Se a MIA oferece horarios em sabado ou domingo, isso e um PROBLEMA (agenda inexistente em fim de semana).
-- Data de hoje: {data_hoje} ({dia_semana_hoje}). Use os timestamps da conversa para deduzir corretamente os dias da semana.
+- Data de hoje: {data_hoje} ({dia_semana_hoje}).
+- CALENDARIO DOS PROXIMOS 30 DIAS (use como referencia exata para verificar dias da semana):
+{calendario}
+- REGRA DIAS DA SEMANA: Para verificar se um dia ofertado e correto, consulte APENAS o calendario acima. NUNCA calcule por conta propria. Se o calendario confirma que o dia e correto, NAO e problema.
 
 ATORES NA CONVERSA:
 - "mia" ou "ai" = a IA Morada fazendo a abordagem
@@ -45,11 +48,15 @@ TIPOS DE PROBLEMA (so registre se for INEQUIVOCO):
 - Pre-vendedor demorando para responder: MAIS DE 1H dentro do horario comercial (09h-18h). Fora do horario: prazo começa as 09h do dia util seguinte, aceitavel ate 2H
 - Pre-vendedor passando informacoes claramente incorretas
 
-CRITERIOS DE TEMPERATURA (baseada no ENGAJAMENTO do lead):
-- Quente: Lead respondendo ativamente, fazendo perguntas, demonstrando interesse claro
-- Morno: Lead respondeu mas com pouca iniciativa, respostas curtas ou esparsas
-- Frio: Lead parou de responder, ou deu sinais claros de desinteresse
-- Indefinido: Conversa muito curta, impossivel avaliar engajamento
+ESTATISTICAS DA CONVERSA:
+- Mensagens enviadas pela IA: {msgs_ia}
+- Mensagens enviadas pelo Lead: {msgs_lead}
+
+CRITERIOS DE TEMPERATURA — baseie-se nas estatisticas acima como ponto de partida objetivo:
+- Quente: Lead enviou 7 ou mais mensagens
+- Morno: Lead enviou entre 3 e 6 mensagens
+- Frio: Lead enviou 0, 1 ou 2 mensagens
+- Indefinido: Impossivel contar mensagens do lead (conversa corrompida ou sem mensagens)
 
 DADOS DO LEAD (notas e atividades do CRM):
 {contexto_crm}
@@ -111,6 +118,7 @@ async function fetchCTWPPLeads(
   // 2. Pipedrive — detalhes + URL da Morada (lotes de 5)
   const token  = process.env.PIPEDRIVE_API_TOKEN
   const domain = process.env.PIPEDRIVE_COMPANY_DOMAIN || "seazone"
+  const stageMap = await fetchPipelineStages(domain, token!)
   const leads: PipedriveLead[] = []
 
   for (let i = 0; i < dealIds.length; i += 5) {
@@ -135,7 +143,7 @@ async function fetchCTWPPLeads(
           deal_id:                 deal.id as number,
           deal_title:              (deal.title as string) || "",
           owner_name:              ((deal.owner_id as Record<string, unknown>)?.name as string) || "",
-          stage_name:              SZI_STAGES[stageId] || `Stage ${stageId}`,
+          stage_name:              stageMap[stageId] || `Stage ${stageId}`,
           deal_created_at:         (deal.add_time as string) || "",
           morada_conversation_url: moradaUrl,
           morada_conversation_id:  moradaId,
@@ -238,14 +246,61 @@ function normalizeTag(raw: string): string {
   return "Não entendeu"
 }
 
-async function analyzeWithAI(conversation: string, contextCrm: string, dateStr: string) {
-  const DAYS = ["domingo","segunda-feira","terca-feira","quarta-feira","quinta-feira","sexta-feira","sabado"]
-  const d    = new Date(dateStr + "T12:00:00")
+function countMessages(messages: MetabaseMessage[]): { ia: number; lead: number } {
+  let ia = 0, lead = 0
+  for (const m of messages) {
+    if (["mia", "ai", "mia_message_template"].includes(m.role)) ia++
+    else lead++
+  }
+  return { ia, lead }
+}
+
+async function fetchPipelineStages(domain: string, token: string): Promise<Record<number, string>> {
+  try {
+    const res = await fetch(
+      `https://${domain}.pipedrive.com/api/v1/stages?pipeline_id=28&api_token=${token}`,
+      { cache: "no-store" }
+    )
+    if (!res.ok) return { ...SZI_STAGES }
+    const data = await res.json()
+    const map: Record<number, string> = { ...SZI_STAGES }
+    for (const s of (data.data || [])) map[s.id as number] = s.name as string
+    return map
+  } catch {
+    return { ...SZI_STAGES }
+  }
+}
+
+function buildCalendar(dateStr: string): string {
+  const DAYS = ["domingo","segunda-feira","terça-feira","quarta-feira","quinta-feira","sexta-feira","sábado"]
+  const lines: string[] = []
+  const base = new Date(dateStr + "T12:00:00Z")
+  for (let i = 1; i <= 30; i++) {
+    const d = new Date(base.getTime() + i * 86_400_000)
+    const yyyy = d.getUTCFullYear()
+    const mm   = String(d.getUTCMonth() + 1).padStart(2, "0")
+    const dd   = String(d.getUTCDate()).padStart(2, "0")
+    lines.push(`  ${dd}/${mm}/${yyyy} = ${DAYS[d.getUTCDay()]}`)
+  }
+  return lines.join("\n")
+}
+
+async function analyzeWithAI(
+  conversation: string,
+  contextCrm: string,
+  dateStr: string,
+  msgs: { ia: number; lead: number },
+) {
+  const DAYS = ["domingo","segunda-feira","terça-feira","quarta-feira","quinta-feira","sexta-feira","sábado"]
+  const d    = new Date(dateStr + "T12:00:00Z")
   const prompt = ANALYSIS_PROMPT
     .replace("{contexto_crm}",      contextCrm || "(sem dados de CRM)")
     .replace("{conversa}",          conversation)
     .replace("{data_hoje}",         dateStr)
-    .replace("{dia_semana_hoje}",   DAYS[d.getDay()])
+    .replace("{dia_semana_hoje}",   DAYS[d.getUTCDay()])
+    .replace("{calendario}",        buildCalendar(dateStr))
+    .replace("{msgs_ia}",           String(msgs.ia))
+    .replace("{msgs_lead}",         String(msgs.lead))
 
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method:  "POST",
@@ -319,7 +374,8 @@ export async function runAuditCTWPP(
       if (!filtered.length) return null
 
       try {
-        const analysis = await analyzeWithAI(formatConversation(filtered.slice(-100)), contextCrm, today)
+        const msgCounts = countMessages(filtered)
+        const analysis  = await analyzeWithAI(formatConversation(filtered.slice(-100)), contextCrm, today, msgCounts)
         return { ...lead, ...analysis } as AuditCTWPPLead
       } catch {
         return { ...lead, tem_problema: false, temperatura: "Indefinido", tag: "",
