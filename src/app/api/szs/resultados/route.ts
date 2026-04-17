@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
 import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
+import { getModuleConfig } from "@/lib/modules";
+import { queryNekt } from "@/lib/nekt";
 
 /* ── Macro-channel mapping ────────────────────────────────── */
 const MACRO_CHANNELS: Record<string, string> = {
@@ -44,6 +46,7 @@ function getCanalGroup(canalId: string): string {
 
 const CHANNEL_ORDER = ["Geral", "Vendas Diretas", "Parceiros", "Expansão"] as const;
 
+
 const CHANNEL_FILTERS: Record<string, string> = {
   Geral: "Todos os canais\nExclui: Duplicado/Erro",
   "Vendas Diretas": "Inclui: Marketing, Mônica, Ind. Colaborador, Eventos, Ind. Clientes, Outros\nExclui: Expansão, Spots, Ind. Corretor, Ind. Franquia, Duplicado/Erro",
@@ -77,21 +80,44 @@ const SZS_RESULTADOS_METAS: Record<string, Record<string, ChannelMetas>> = {
   },
 };
 
-const CHANNEL_CLOSERS: Record<string, string[]> = {
-  Geral: ["Gabriela Lemos", "Gabriela Branco", "Giovanna Araujo Zanchetta", "Maria Amaral", "Samuel Barreto"],
-  "Vendas Diretas": ["Gabriela Lemos", "Maria Amaral"],
-  Parceiros: ["Gabriela Branco"],
-  "Expansão": ["Giovanna Araujo Zanchetta", "Samuel Barreto"],
+/* ── Email → channel tabs (espelho do sync-szs-calendar, que usa emails hardcoded) ──
+ * squad_closer_rules pode não ter todos os emails do calendário SZS.
+ * Este mapa é a fonte de verdade para sub-canal; squad_closer_rules serve só de fallback.  */
+const SZS_EMAIL_CHANNEL_MAP: Record<string, string[]> = {
+  "gabriela.lemos@seazone.com.br":  ["Geral", "Vendas Diretas"],
+  "gabriela.branco@seazone.com.br": ["Geral", "Parceiros"],
+  "giovanna.araujo@seazone.com.br": ["Geral", "Expansão"],
 };
 
-/* ── Closer email → tabs (for calendar events) ──────────── */
-const CLOSER_EMAIL_CHANNEL: Record<string, string[]> = {
-  "maria.amaral@seazone.com.br":          ["Geral", "Vendas Diretas"],
-  "gabriela.lemos@seazone.com.br":        ["Geral", "Vendas Diretas"],
-  "gabriela.branco@seazone.com.br":       ["Geral", "Parceiros"],
-  "giovanna.araujo@seazone.com.br":       ["Geral", "Expansão"],
-  "samuel.barreto@seazone.com.br":        ["Geral", "Expansão"],
-};
+const mc = getModuleConfig("szs");
+
+/* ── Build email→tabs map: hardcoded primeiro, fallback por squad_closer_rules ── */
+function closerNorm(s: string) {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function buildEmailChannelMap(rules: { email: string }[]): Record<string, string[]> {
+  // Começa com o mapa hardcoded (garante VD/Parceiros/Expansão corretos)
+  const map: Record<string, string[]> = { ...SZS_EMAIL_CHANNEL_MAP };
+  // Adiciona emails de squad_closer_rules que não estão no mapa hardcoded
+  for (const r of rules) {
+    if (map[r.email]) continue; // já mapeado
+    const prefix = r.email.split("@")[0].replace(".", " ");
+    const pn = closerNorm(prefix);
+    const matchedConfig = mc.closers.find((c) => {
+      const cn = closerNorm(c);
+      return cn.includes(pn) || pn.includes(cn.split(" ")[0]);
+    });
+    if (!matchedConfig) continue;
+    const tabs = mc.closers.includes(matchedConfig)
+      ? (matchedConfig === "Gabriela Branco" ? ["Geral", "Parceiros"]
+        : matchedConfig === "Giovanna Zanchetta" ? ["Geral", "Expansão"]
+        : ["Geral", "Vendas Diretas"])
+      : ["Geral"];
+    map[r.email] = tabs;
+  }
+  return map;
+}
 
 const MEETINGS_PER_DAY = 16;
 const WORK_DAYS_PER_WEEK = 5;
@@ -148,6 +174,19 @@ export async function GET(request: NextRequest) {
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
     const startDate = `${monthKey}-01`;
 
+    // ── Fetch active closer emails from squad_closer_rules (same logic as szs/ociosidade) ──
+    const { data: closerRules } = await admin
+      .from("squad_closer_rules")
+      .select("email")
+      .in("setor", ["SZS", "Expansao"]);
+    const closerEmailChannelMap = buildEmailChannelMap(closerRules || []);
+    const activeCloserEmails = Object.keys(closerEmailChannelMap);
+    // Build per-channel closer counts for capacity calculation
+    const channelCloserCount: Record<string, number> = { Geral: 0, "Vendas Diretas": 0, Parceiros: 0, "Expansão": 0 };
+    for (const tabs of Object.values(closerEmailChannelMap)) {
+      for (const tab of tabs) channelCloserCount[tab] = (channelCloserCount[tab] || 0) + 1;
+    }
+
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
     const prevStart = `${prevKey}-01`;
@@ -193,6 +232,34 @@ export async function GET(request: NextRequest) {
     const metaRows = await paginate((o, ps) =>
       admin.from("szs_meta_ads").select("ad_id, spend_month").gte("snapshot_date", startDate).range(o, o + ps - 1)
     );
+
+    // ── Orçamento do mês de szs_orcamento ──
+    const { data: orcData } = await admin
+      .from("szs_orcamento")
+      .select("orcamento_total")
+      .eq("mes", monthKey)
+      .maybeSingle();
+    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Fallback 1: soma dos budgets aprovados por empreendimento
+    if (!orcamentoMeta) {
+      const { data: approvedRows } = await admin
+        .from("szs_orcamento_approved")
+        .select("budget_recomendado")
+        .eq("mes", monthKey);
+      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
+    }
+    // Fallback 2: mês mais recente disponível em szs_orcamento
+    if (!orcamentoMeta) {
+      const { data: prevOrc } = await admin
+        .from("szs_orcamento")
+        .select("orcamento_total")
+        .lt("mes", monthKey)
+        .order("mes", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+    }
     // Dedup: max spend_month per ad_id (multiple snapshots in the month)
     const adSpend = new Map<string, number>();
     for (const r of metaRows) {
@@ -206,8 +273,8 @@ export async function GET(request: NextRequest) {
     // Snapshots from pipedrive_daily_snapshot (pipeline 14)
     const todayStr = now.toISOString().substring(0, 10);
 
-    const snapshots: Record<string, { agDados: number; contrato: number; agendado: number; totalOpen: number }> = {};
-    for (const ch of CHANNEL_ORDER) snapshots[ch] = { agDados: 0, contrato: 0, agendado: 0, totalOpen: 0 };
+    const snapshots: Record<string, { agDados: number; contrato: number; totalOpen: number }> = {};
+    for (const ch of CHANNEL_ORDER) snapshots[ch] = { agDados: 0, contrato: 0, totalOpen: 0 };
 
     // Busca snapshot mais recente (não só de hoje — sync pode não ter rodado)
     const { data: pdSnap } = await admin
@@ -218,26 +285,83 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    // Snapshots de Ag.Dados e Contrato direto de szs_deals (sempre atualizado, filtrável por cidade e canal)
+    // Ag.Dados (stage 152) e Em Contrato (stage 76) por sub-canal via Nekt + owner_name
+    // Canal pode estar null para muitos deals → classificação por canal é instável.
+    // Owner_name (quem é responsável pelo deal) é a fonte correta para separar
+    // VD (Gabi Lemos) / Parceiros (Gabi Branco) / Expansão (Giovanna Araujo).
+    // Geral = total de todos os deals, independente do owner.
+    // Ag.Dados (stage 152) e Em Contrato (stage 76) via Nekt
     {
-      const snapDeals = await paginate((o, ps) =>
-        admin.from("szs_deals")
-          .select("stage_id, empreendimento, canal")
-          .eq("status", "open")
-          .in("stage_id", [152, 76])
-          .range(o, o + ps - 1),
-      );
-      console.log(`[szs-resultados] snapDeals (stage 152/76): ${snapDeals.length} deals, cityFilter=${cityFilter}`);
-      for (const d of snapDeals) {
-        if (cityFilter && getCidadeGroup(d.empreendimento || "") !== cityFilter) continue;
-        const canalGroup = getCanalGroup(d.canal || "");
-        const tabs = getChannelTabs(canalGroup);
-        for (const tab of tabs) {
-          if (d.stage_id === 152) snapshots[tab].agDados++;
-          if (d.stage_id === 76)  snapshots[tab].contrato++;
+      try {
+        const nektSnaps = await queryNekt(`
+          SELECT etapa, canal, deal_owner_name
+          FROM nekt_silver.pipedrive_deals_readable
+          WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) IN (152, 76)
+        `);
+
+
+        for (const ch of CHANNEL_ORDER) {
+          snapshots[ch].agDados = 0;
+          snapshots[ch].contrato = 0;
+        }
+
+        // Ambos os stages: classificar por canal do Nekt
+        // ATENÇÃO: Nekt retorna nomes completos, não abreviações
+        // Ex: "Indicação de Corretor" (não "Ind. Corretor"), "Indicaçao de Franquia" (typo sem acento)
+        const NEKT_CANAL_NAME_TO_GROUP: Record<string, string> = {
+          // VD
+          "Marketing": "Marketing",
+          "Mônica": "Mônica",
+          "Monica": "Mônica",
+          // Parceiros — nomes completos conforme Nekt
+          "Parceiros": "Parceiros",
+          "Indicação de Corretor": "Ind. Corretor",
+          "Indicacao de Corretor": "Ind. Corretor",
+          "Ind. Corretor": "Ind. Corretor",
+          "Indicação de Franquia": "Ind. Franquia",
+          "Indicaçao de Franquia": "Ind. Franquia",
+          "Indicacao de Franquia": "Ind. Franquia",
+          "Ind. Franquia": "Ind. Franquia",
+          "Indicação de Outros Parceiros": "Ind. Outros Parceiros",
+          "Ind. Outros Parceiros": "Ind. Outros Parceiros",
+          // Expansão
+          "Expansão": "Expansão",
+          "Expansao": "Expansão",
+          "Expansion": "Expansão",
+          "Spots": "Spots",
+        };
+
+
+        for (const row of nektSnaps.rows) {
+          const stageId = parseInt(String(row.etapa || "0"));
+          const canalName = String(row.canal || "");
+          const canalGroup = NEKT_CANAL_NAME_TO_GROUP[canalName] || "Outros";
+          const tabs = getChannelTabs(canalGroup);
+          for (const tab of tabs) {
+            if (stageId === 152) snapshots[tab].agDados++;
+            if (stageId === 76) snapshots[tab].contrato++;
+          }
+        }
+
+        // Geral = total real (todos os deals)
+        snapshots.Geral.agDados = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 152).length;
+        snapshots.Geral.contrato = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 76).length;
+        console.log(`[szs-resultados] ag/contrato: Geral=${snapshots.Geral.agDados}/${snapshots.Geral.contrato}, VD=${snapshots["Vendas Diretas"].agDados}/${snapshots["Vendas Diretas"].contrato}, Parc=${snapshots.Parceiros.agDados}/${snapshots.Parceiros.contrato}, Exp=${snapshots["Expansão"].agDados}/${snapshots["Expansão"].contrato}`);
+      } catch (e) {
+        console.warn("[szs-resultados] Nekt indisponível para ag/contrato, usando szs_open_snapshots:", e);
+        const { data: latestRow } = await admin.from("szs_open_snapshots").select("date").order("date", { ascending: false }).limit(1).maybeSingle();
+        const snapDate = latestRow?.date || todayStr;
+        const { data: openSnaps } = await admin.from("szs_open_snapshots").select("canal_group, ag_dados, contrato").eq("date", snapDate);
+        for (const s of openSnaps || []) {
+          const tabs = getChannelTabs(s.canal_group || "");
+          for (const tab of tabs) {
+            snapshots[tab].agDados += s.ag_dados || 0;
+            snapshots[tab].contrato += s.contrato || 0;
+          }
         }
       }
     }
+
     // Total open: pipedrive_daily_snapshot (mais confiável) > szs_open_snapshots > delta approach
     if (pdSnap) {
       snapshots.Geral.totalOpen = pdSnap.total_open || 0;
@@ -377,32 +501,71 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Google Calendar: count meetings scheduled in next 7 days per closer
+    // Ocupação agenda — duas fontes:
+    //   Geral: deals abertos na etapa Agendado (stage_id 73, pipeline 14) via Nekt — cobre todos os canais
+    //   VD / Parceiros / Expansão: reuniões agendadas nos próximos 7 dias do closer específico (szs_calendar_events)
     const today = now.toISOString().substring(0, 10);
     const next7 = new Date(now);
     next7.setDate(next7.getDate() + 6);
     const next7Str = next7.toISOString().substring(0, 10);
-    const calendarRows = await paginate((o, ps) =>
-      admin.from("szs_calendar_events").select("closer_email, empreendimento").gte("dia", today).lte("dia", next7Str).eq("cancelou", false).range(o, o + ps - 1)
-    );
-    for (const ev of calendarRows) {
+    const agendaByChannel: Record<string, number> = { Geral: 0, "Vendas Diretas": 0, Parceiros: 0, "Expansão": 0 };
+
+    // Geral: funil Pipedrive (Nekt) — todos os canais, stage Agendado
+    try {
+      const nektResult = await queryNekt(`
+        SELECT 1 FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) = 73
+      `);
+      agendaByChannel["Geral"] = nektResult.rows.length;
+      console.log(`[szs/agendados] Nekt Geral: ${agendaByChannel["Geral"]} deals no stage Agendado`);
+    } catch (e) {
+      console.warn("[szs/resultados] Nekt indisponível para agendados Geral, usando szs_deals:", e);
+      const fallback = await paginate((o, ps) =>
+        admin.from("szs_deals").select("canal")
+          .eq("status", "open").eq("stage_order", 6).range(o, o + ps - 1)
+      );
+      agendaByChannel["Geral"] = fallback.length;
+    }
+
+    // VD / Parceiros / Expansão: calendário do closer específico (próximos 7 dias, não canceladas)
+    // ATENÇÃO: NÃO usar .eq("cancelou", false) — exclui NULLs (armadilha Supabase). Filtrar em JS.
+    const calendarAgendRows = activeCloserEmails.length > 0
+      ? await paginate((o, ps) =>
+          admin.from("szs_calendar_events")
+            .select("closer_email, cancelou, empreendimento")
+            .in("closer_email", activeCloserEmails)
+            .gte("dia", today).lte("dia", next7Str)
+            .range(o, o + ps - 1)
+        )
+      : [];
+    for (const ev of calendarAgendRows) {
+      if (ev.cancelou) continue; // NULL = não cancelada, conta; true = cancelada, ignora
       if (cityFilter && getCidadeGroup(ev.empreendimento || "") !== cityFilter) continue;
-      const tabs = CLOSER_EMAIL_CHANNEL[ev.closer_email] || [];
-      for (const tab of tabs) snapshots[tab].agendado++;
+      const tabs = closerEmailChannelMap[ev.closer_email] || [];
+      for (const tab of tabs) {
+        if (tab === "Geral") continue; // Geral vem do funil, não do calendário
+        agendaByChannel[tab] = (agendaByChannel[tab] || 0) + 1;
+      }
     }
 
     // No-show: cancelled meetings in last 7 days vs total
     const past7 = new Date(now);
     past7.setDate(past7.getDate() - 6);
     const past7Str = past7.toISOString().substring(0, 10);
-    const noShowRows = await paginate((o, ps) =>
-      admin.from("szs_calendar_events").select("closer_email, cancelou, empreendimento").gte("dia", past7Str).lte("dia", today).range(o, o + ps - 1)
-    );
+    const noShowRows = activeCloserEmails.length > 0
+      ? await paginate((o, ps) =>
+          admin.from("szs_calendar_events")
+            .select("closer_email, cancelou, empreendimento")
+            .in("closer_email", activeCloserEmails)
+            .gte("dia", past7Str).lte("dia", today)
+            .range(o, o + ps - 1)
+        )
+      : [];
     const noShowData: Record<string, { canceladas: number; total: number }> = {};
     for (const ch of CHANNEL_ORDER) noShowData[ch] = { canceladas: 0, total: 0 };
     for (const ev of noShowRows) {
       if (cityFilter && getCidadeGroup(ev.empreendimento || "") !== cityFilter) continue;
-      const tabs = CLOSER_EMAIL_CHANNEL[ev.closer_email] || [];
+      const tabs = closerEmailChannelMap[ev.closer_email] || [];
       for (const tab of tabs) {
         noShowData[tab].total++;
         if (ev.cancelou) noShowData[tab].canceladas++;
@@ -439,8 +602,11 @@ export async function GET(request: NextRequest) {
       const counts = channelCounts[name] || {};
       const meta = metas[name] || { mql: 0, sql: 0, opp: 0, won: 0 };
       const snap = snapshots[name];
-      const closers = CHANNEL_CLOSERS[name] || [];
-      const capacity = closers.length * MEETINGS_PER_DAY * WORK_DAYS_PER_WEEK;
+      const nClosers = channelCloserCount[name] || 0;
+      const capacity = nClosers * MEETINGS_PER_DAY * WORK_DAYS_PER_WEEK;
+      const closers = Object.entries(closerEmailChannelMap)
+        .filter(([, tabs]) => tabs.includes(name))
+        .map(([email]) => email.split("@")[0].replace(".", " "));
 
       const metrics: ChannelResult["metrics"] = {
         mql: { real: counts.mql || 0, meta: meta.mql },
@@ -448,7 +614,7 @@ export async function GET(request: NextRequest) {
         opp: { real: counts.opp || 0, meta: meta.opp },
         won: { real: counts.won || 0, meta: meta.won },
       };
-      if (meta.orcamento != null) metrics.orcamento = { real: Math.round(totalSpend), meta: meta.orcamento };
+      if (name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       if (meta.leads != null) metrics.leads = { real: counts.mql || 0, meta: meta.leads };
 
       // Charts use delta-computed history from szs_deals
@@ -469,11 +635,15 @@ export async function GET(request: NextRequest) {
               agDadosMeta: meta.agDados,
               contratoMeta: meta.contrato,
             }
-          : { aguardandoDados: snap.agDados, emContrato: snap.contrato, totalOpen: snap.totalOpen },
+          : {
+              aguardandoDados: snap.agDados,
+              emContrato: snap.contrato,
+              totalOpen: snap.totalOpen,
+            },
         ocupacaoAgenda: {
-          agendadas: snap.agendado,
+          agendadas: agendaByChannel[name] ?? 0,
           capacidade: capacity,
-          percent: capacity > 0 ? Math.round((snap.agendado / capacity) * 1000) / 10 : 0,
+          percent: capacity > 0 ? Math.round(((agendaByChannel[name] ?? 0) / capacity) * 1000) / 10 : 0,
           closers,
           meetingsPerDay: MEETINGS_PER_DAY,
           workDays: WORK_DAYS_PER_WEEK,

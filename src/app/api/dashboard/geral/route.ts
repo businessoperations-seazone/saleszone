@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { createSquadSupabaseAdmin, hasServiceRole } from "@/lib/squad/supabase";
 import { createAuthenticatedSupabaseAdmin } from "@/lib/supabase/server";
 import { paginate } from "@/lib/paginate";
+import { queryNekt } from "@/lib/nekt";
 import type { GeralData, GeralChannelResult, GeralMetricPair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -268,6 +269,20 @@ export async function GET(req: NextRequest) {
     const pdTotalOpen = pdSnapshot?.total_open || 0;
     const pdByStage = (pdSnapshot?.by_stage || {}) as Record<string, number>;
 
+    // Nekt real-time open count (preferido sobre pdTotalOpen que é diário/stale)
+    let nektTotalOpen = 0;
+    try {
+      const nektOpenResult = await queryNekt(`
+        SELECT COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 28
+      `);
+      nektTotalOpen = parseInt(String(nektOpenResult.rows[0]?.total || "0"));
+      console.log(`[geral] Nekt total open pipeline 28: ${nektTotalOpen}`);
+    } catch (e) {
+      console.warn("[geral] Nekt indisponível para open count, usando pdTotalOpen:", e);
+    }
+
     // Snapshots: Geral from daily snapshot, VD/Parceiros from squad_deals
     const snaps: Record<string, { reserva: number; contrato: number }> = {};
     for (const ch of CHANNEL_ORDER) snaps[ch] = { reserva: 0, contrato: 0 };
@@ -320,14 +335,21 @@ export async function GET(req: NextRequest) {
     const delta: Record<string, number[]> = {};
     for (const ch of HIST_CHANNELS) delta[ch] = new Array(N + 1).fill(0);
 
-    // dailyEvents[channel][stage][dateIdx] — event count per day per stage (MultiLineChart)
-    // MQL uses add_time, SQL uses qualificacao_date, OPP uses reuniao_date
-    const dailyEvents: Record<string, Record<string, number[]>> = {};
+    // stageByDay[channel][stage][dateIdx] — stock of open deals per stage bucket per day
+    // MQL = stage_order 1-4 (Lead in, Contatados, Qualificação)
+    // SQL = stage_order 5-8 (Qualificado onwards)
+    // OPP = stage_order 9-12 (Reunião Realizada onwards, excl. Reserva/Contrato)
+    // Reserva = stage_order 13, Contrato = stage_order 14
+    // WON = deals won on that day (flow)
+    const stageByDay: Record<string, Record<string, number[]>> = {};
     for (const ch of HIST_CHANNELS) {
-      dailyEvents[ch] = {
+      stageByDay[ch] = {
         mql: new Array(N).fill(0),
         sql: new Array(N).fill(0),
         opp: new Array(N).fill(0),
+        reserva: new Array(N).fill(0),
+        contrato: new Array(N).fill(0),
+        won: new Array(N).fill(0),
       };
     }
 
@@ -359,33 +381,32 @@ export async function GET(req: NextRequest) {
         if (closeIdx !== null) delta[ch][closeIdx]--;
       }
 
-      // Daily events per stage using stage-specific dates
-      // MQL: add_time (exclude indicação for Vendas Diretas)
-      const mqlIdx = dateIndex.get(addDay);
-      if (mqlIdx !== undefined) {
-        for (const ch of targets) dailyEvents[ch]["mql"][mqlIdx]++;
-      }
+      // Stage bucket stock: cumulative counts (deals in stage X also count in all lower stages)
+      // MQL = stage_order >= 1, SQL >= 5, OPP >= 9, Reserva >= 13, Contrato >= 14
+      const so = (d as any).stage_order ?? 0;
 
-      // SQL: qualificacao_date
-      const sqlDay = (d as any).qualificacao_date?.substring(0, 10);
-      if (sqlDay) {
-        const sqlIdx = dateIndex.get(sqlDay);
-        if (sqlIdx !== undefined) {
-          for (const ch of targets) dailyEvents[ch]["sql"][sqlIdx]++;
+      if (d.status === "open") {
+        for (let i = addIdx; i < N; i++) {
+          for (const ch of targets) {
+            if (so >= TH_MQL && so < TH_SQL) stageByDay[ch]["mql"][i]++;
+            if (so >= TH_SQL) stageByDay[ch]["sql"][i]++;
+            if (so >= TH_OPP) stageByDay[ch]["opp"][i]++;
+            if (so >= TH_RESERVA) stageByDay[ch]["reserva"][i]++;
+            if (so >= TH_CONTRATO) stageByDay[ch]["contrato"][i]++;
+          }
         }
-      }
-
-      // OPP: reuniao_date
-      const oppDay = (d as any).reuniao_date?.substring(0, 10);
-      if (oppDay) {
-        const oppIdx = dateIndex.get(oppDay);
-        if (oppIdx !== undefined) {
-          for (const ch of targets) dailyEvents[ch]["opp"][oppIdx]++;
+      } else if (d.status === "won") {
+        const wonDay = d.won_time?.substring(0, 10);
+        if (wonDay) {
+          const wonIdx = dateIndex.get(wonDay);
+          if (wonIdx !== undefined) {
+            for (const ch of targets) stageByDay[ch]["won"][wonIdx]++;
+          }
         }
       }
     }
 
-    // Build channelHistory: cumulative total (stock) + daily events per stage (flow)
+    // Build channelHistory: cumulative total (stock) + stage bucket stock per day
     const channelHistory: Record<string, { date: string; total: number; openTotal: number; byStage: Record<string, number> }[]> = {};
     for (const ch of HIST_CHANNELS) {
       const arr: { date: string; total: number; openTotal: number; byStage: Record<string, number> }[] = [];
@@ -397,58 +418,94 @@ export async function GET(req: NextRequest) {
           total: cumTotal,
           openTotal: cumTotal,
           byStage: {
-            mql: dailyEvents[ch]["mql"][i],
-            sql: dailyEvents[ch]["sql"][i],
-            opp: dailyEvents[ch]["opp"][i],
+            mql: stageByDay[ch]["mql"][i],
+            sql: stageByDay[ch]["sql"][i],
+            opp: stageByDay[ch]["opp"][i],
+            reserva: stageByDay[ch]["reserva"][i],
+            contrato: stageByDay[ch]["contrato"][i],
+            won: stageByDay[ch]["won"][i],
           },
         });
       }
       channelHistory[ch] = arr;
     }
 
-    // Override Geral's last data point total with daily snapshot (accurate open count from Pipedrive)
-    // byStage is NOT overridden — it shows today's daily events from squad_deals
-    if (pdTotalOpen > 0) {
-      const geralArr = channelHistory["Geral"];
-      if (geralArr && geralArr.length > 0) {
-        const last = geralArr[geralArr.length - 1];
-        geralArr[geralArr.length - 1] = { ...last, total: pdTotalOpen, openTotal: pdTotalOpen };
-      }
+    // Conta deals abertos no funil por canal — status=open, max_stage_order >= TH_MQL
+    // Usa histDeals que já carregou todos os deals abertos (sem cutoff de data para status=open)
+    const openByChannel: Record<string, number> = { Geral: 0, "Vendas Diretas": 0, Parceiros: 0 };
+    for (const d of histDeals) {
+      if (d.status !== "open") continue;
+      if (d.lost_reason === "Duplicado/Erro") continue;
+      const mso = (d as any).max_stage_order ?? (d as any).stage_order ?? 0;
+      if (mso < TH_MQL) continue;
+      const macro = getMacroChannel(d.canal);
+      openByChannel["Geral"]++;
+      if (macro === "Vendas Diretas") openByChannel["Vendas Diretas"]++;
+      else if (macro === "Parceiros") openByChannel["Parceiros"]++;
     }
 
-    // ── 8. Ocupação Agenda + No-Show (calendar events, next 7 days / last 7 days) ──
-    // Dynamic: read closer emails from squad_closer_rules
+    // Sobrescreve o último ponto de cada canal com a contagem real de abertos
+    // Para Geral, prefere pdTotalOpen (pipedrive_daily_snapshot) se disponível
+    for (const ch of HIST_CHANNELS) {
+      const arr = channelHistory[ch];
+      if (!arr || arr.length === 0) continue;
+      const last = arr[arr.length - 1];
+      const geralOpen = nektTotalOpen > 0 ? nektTotalOpen : pdTotalOpen;
+      const realOpen = ch === "Geral" && geralOpen > 0 ? geralOpen : openByChannel[ch];
+      arr[arr.length - 1] = { ...last, total: realOpen, openTotal: realOpen };
+    }
+
+    // ── 8. Ocupação Agenda + No-Show ──
+    // Agendadas = deals abertos no stage "Agendado" (187) do pipeline 28
+    // Capacidade = nClosers × 16 slots/dia × 5 dias
     const { data: closerRules } = await admin.from("squad_closer_rules").select("email").eq("setor", "SZI");
     const CLOSER_EMAILS = (closerRules || []).map((r: { email: string }) => r.email);
-    const MEETINGS_PER_DAY = 8;
+    const MEETINGS_PER_DAY = 16;
     const WORK_DAYS = 5;
+    const capacidade = CLOSER_EMAILS.length * MEETINGS_PER_DAY * WORK_DAYS;
 
-    // Vendas Diretas: closers de V_COLS, 14 slots/dia
-    const { data: vdCloserRules } = await admin.from("squad_closer_rules").select("email").in("prefixo", ["Apresentação"]).eq("setor", "SZI");
-    const VD_CLOSER_EMAILS = (vdCloserRules || []).map((r: { email: string }) => r.email);
-    const VD_SLOTS_PER_DAY = 14;
-    const next7 = new Date(now); next7.setDate(next7.getDate() + 6);
-    const next7Str = next7.toISOString().substring(0, 10);
+    // Busca deals abertos no stage Agendado (187) via Nekt — dados em tempo real do Pipedrive
+    const agendaByChannel: Record<string, number> = { Geral: 0, "Vendas Diretas": 0, Parceiros: 0 };
+    try {
+      const nektResult = await queryNekt(`
+        SELECT *
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open'
+          AND pipeline_id = 28
+          AND CAST(etapa AS INTEGER) = 187
+      `);
+      console.log(`[geral/agendados] Nekt rows: ${nektResult.rows.length}, columns: ${nektResult.columns.join(", ")}`);
+      for (const r of nektResult.rows) {
+        const canalId = String(r.canal_id ?? r.canal ?? "");
+        const macro = getMacroChannel(canalId);
+        agendaByChannel["Geral"]++;
+        if (macro === "Parceiros") agendaByChannel["Parceiros"]++;
+        else if (macro === "Vendas Diretas") agendaByChannel["Vendas Diretas"]++;
+      }
+    } catch (e) {
+      console.warn("[geral] Nekt indisponível para agendados, usando squad_deals:", e);
+      const agendadosDeals = await paginate((o, ps) =>
+        admin.from("squad_deals").select("canal")
+          .eq("status", "open").eq("stage_id", 187).range(o, o + ps - 1)
+      );
+      for (const d of agendadosDeals) {
+        const macro = getMacroChannel(d.canal);
+        agendaByChannel["Geral"]++;
+        if (macro === "Parceiros") agendaByChannel["Parceiros"]++;
+        else if (macro === "Vendas Diretas") agendaByChannel["Vendas Diretas"]++;
+      }
+    }
+    console.log("[geral/agendados] agendaByChannel:", agendaByChannel);
+
+    // No-Show: eventos cancelados nos últimos 7 dias via calendar
     const past7 = new Date(now); past7.setDate(past7.getDate() - 6);
     const past7Str = past7.toISOString().substring(0, 10);
-
-    const [agendaRows, noShowRows] = await Promise.all([
-      paginate((o, ps) =>
-        admin.from("squad_calendar_events").select("closer_email").gte("dia", today).lte("dia", next7Str).eq("cancelou", false).range(o, o + ps - 1),
-      ),
-      paginate((o, ps) =>
-        admin.from("squad_calendar_events").select("cancelou").gte("dia", past7Str).lte("dia", today).range(o, o + ps - 1),
-      ),
-    ]);
-
-    const agendadas = agendaRows.filter((e: any) => CLOSER_EMAILS.includes(e.closer_email)).length;
-    const capacidade = CLOSER_EMAILS.length * MEETINGS_PER_DAY * WORK_DAYS;
-    const agendaPct = capacidade > 0 ? Math.round((agendadas / capacidade) * 1000) / 10 : 0;
-
-    // Vendas Diretas ocupação
-    const vdAgendadas = agendaRows.filter((e: any) => VD_CLOSER_EMAILS.includes(e.closer_email)).length;
-    const vdCapacidade = VD_CLOSER_EMAILS.length * VD_SLOTS_PER_DAY * WORK_DAYS;
-    const vdAgendaPct = vdCapacidade > 0 ? Math.round((vdAgendadas / vdCapacidade) * 1000) / 10 : 0;
+    const noShowRows = CLOSER_EMAILS.length > 0
+      ? await paginate((o, ps) =>
+          admin.from("squad_calendar_events").select("cancelou")
+            .in("closer_email", CLOSER_EMAILS).gte("dia", past7Str).lte("dia", today).range(o, o + ps - 1),
+        )
+      : [];
     const noShowTotal = noShowRows.length;
     const noShowCanceladas = noShowRows.filter((e: any) => e.cancelou).length;
     const noShowPct = noShowTotal > 0 ? Math.round((noShowCanceladas / noShowTotal) * 1000) / 10 : 0;
@@ -493,13 +550,9 @@ export async function GET(req: NextRequest) {
 
       // All channels get snapshots
       result.snapshots = snap;
-      if (name === "Geral") {
-        result.ocupacaoAgenda = { agendadas, capacidade, percent: agendaPct };
-        result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
-      }
-      if (name === "Vendas Diretas") {
-        result.ocupacaoAgenda = { agendadas: vdAgendadas, capacidade: vdCapacidade, percent: vdAgendaPct };
-      }
+      const chAgendadas = agendaByChannel[name] ?? 0;
+      result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
+      result.ocupacaoAgenda = { agendadas: chAgendadas, capacidade, percent: capacidade > 0 ? Math.round((chAgendadas / capacidade) * 1000) / 10 : 0 };
 
       // Geral: reservaHistory (latest accumulated values)
       if (name === "Geral") {

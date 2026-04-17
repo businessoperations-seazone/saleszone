@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
+import { queryNekt } from "@/lib/nekt";
 
 /* ── Channel definitions ──────────────────────────────────── */
 const CHANNEL_ORDER = ["Funil Completo", "Vendas Diretas", "Parcerias"] as const;
@@ -208,6 +209,34 @@ export async function GET() {
       admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
     );
 
+    /* ── 4a. Orçamento do mês de mktp_orcamento ── */
+    const { data: orcData } = await admin
+      .from("mktp_orcamento")
+      .select("orcamento_total")
+      .eq("mes", monthKey)
+      .maybeSingle();
+    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Fallback 1: soma dos budgets aprovados por empreendimento
+    if (!orcamentoMeta) {
+      const { data: approvedRows } = await admin
+        .from("mktp_orcamento_approved")
+        .select("budget_recomendado")
+        .eq("mes", monthKey);
+      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
+    }
+    // Fallback 2: mês mais recente disponível em mktp_orcamento
+    if (!orcamentoMeta) {
+      const { data: prevOrc } = await admin
+        .from("mktp_orcamento")
+        .select("orcamento_total")
+        .lt("mes", monthKey)
+        .order("mes", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+    }
+
     /* ── 4b. Metas do mês de mktp_metas (fallback para hardcoded se vazio) ── */
     const { data: mktpMetasRows } = await admin
       .from("mktp_metas").select("tab, meta").eq("month", `${monthKey}-01`);
@@ -243,45 +272,66 @@ export async function GET() {
       .limit(1)
       .maybeSingle();
 
-    if (pdSnap) {
-      const byStage = (pdSnap.by_stage || {}) as Record<string, number>;
-      snapshots["Funil Completo"].totalOpen = pdSnap.total_open || 0;
-      snapshots["Funil Completo"].reserva = byStage["305"] || 0;
-      snapshots["Funil Completo"].contrato = byStage["271"] || 0;
-      console.log(`[mktp/resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
-    } else {
-      console.warn("[mktp/resultados] No pipedrive_daily_snapshot for pipeline 37 — open deal count will be approximate");
-      // Fallback: mktp_deals table
-      const snapshotDeals = await paginate((o, ps) =>
-        admin.from("mktp_deals").select("stage_id, canal").eq("status", "open").in("stage_id", [STAGE_RESERVA, STAGE_CONTRATO]).range(o, o + ps - 1)
-      );
-      for (const d of snapshotDeals) {
-        const group = getCanalGroup(String(d.canal || ""));
-        if (d.stage_id === STAGE_RESERVA) { snapshots[group].reserva++; snapshots["Funil Completo"].reserva++; }
-        if (d.stage_id === STAGE_CONTRATO) { snapshots[group].contrato++; snapshots["Funil Completo"].contrato++; }
-      }
+    // Always fetch per-canal open deals for sub-channel cards (Vendas Diretas, Parcerias)
+    const snapshotDeals = await paginate((o, ps) =>
+      admin.from("mktp_deals").select("stage_id, canal").eq("status", "open").in("stage_id", [STAGE_RESERVA, STAGE_CONTRATO]).range(o, o + ps - 1)
+    );
+    for (const d of snapshotDeals) {
+      const group = getCanalGroup(String(d.canal || ""));
+      if (d.stage_id === STAGE_RESERVA) { snapshots[group].reserva++; snapshots["Funil Completo"].reserva++; }
+      if (d.stage_id === STAGE_CONTRATO) { snapshots[group].contrato++; snapshots["Funil Completo"].contrato++; }
     }
 
-    /* ── 5b. Ocupação agenda (mktp_calendar_events, próximos 7 dias) ── */
-    const next7 = new Date(now);
-    next7.setDate(next7.getDate() + 7);
-    const next7Date = next7.toISOString().substring(0, 10);
+    // totalOpen: pipedrive_daily_snapshot (OK para total, atualiza 1x/dia)
+    if (pdSnap) {
+      snapshots["Funil Completo"].totalOpen = pdSnap.total_open || 0;
+      console.log(`[mktp/resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
+    }
 
-    const calendarEvents = await paginate((o, ps) =>
-      admin
-        .from("mktp_calendar_events")
-        .select("closer_name")
-        .gte("dia", today)
-        .lte("dia", next7Date)
-        .eq("cancelou", false)
-        .range(o, o + ps - 1)
-    );
+    // Reserva/Contrato do Funil Completo: Nekt real-time (evita stale do daily_snapshot)
+    try {
+      const nektMktp = await queryNekt(`
+        SELECT CAST(etapa AS INTEGER) as stage_id, COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 37 AND CAST(etapa AS INTEGER) IN (305, 271)
+        GROUP BY CAST(etapa AS INTEGER)
+      `);
+      for (const r of nektMktp.rows) {
+        const sid = parseInt(String(r.stage_id || "0"));
+        const cnt = parseInt(String(r.total || "0"));
+        if (sid === 305) snapshots["Funil Completo"].reserva = cnt;
+        if (sid === 271) snapshots["Funil Completo"].contrato = cnt;
+      }
+      console.log(`[mktp/resultados] Nekt reserva=${snapshots["Funil Completo"].reserva} contrato=${snapshots["Funil Completo"].contrato}`);
+    } catch (e) {
+      console.warn("[mktp/resultados] Nekt indisponível, usando mktp_deals para reserva/contrato:", e);
+    }
 
-    const CLOSERS = ["Nevine Saratt", "Willian Miranda"];
+    /* ── 5b. Ocupação agenda — deals abertos no stage Agendado (284) do pipeline 37 ── */
+    const { data: mktpCloserRules } = await admin
+      .from("squad_closer_rules")
+      .select("email")
+      .eq("setor", "MKTP");
+    const MKTP_CLOSER_COUNT = (mktpCloserRules || []).length;
     const MEETINGS_PER_DAY = 16;
     const WORK_DAYS = 5;
-    const totalCapacity = CLOSERS.length * MEETINGS_PER_DAY * WORK_DAYS;
-    const totalAgendadas = calendarEvents.length;
+    const totalCapacity = MKTP_CLOSER_COUNT * MEETINGS_PER_DAY * WORK_DAYS;
+
+    const STAGE_AGENDADO_MKTP = 284;
+    const agendadosMktp = await paginate((o, ps) =>
+      admin.from("mktp_deals").select("canal")
+        .eq("status", "open").eq("stage_id", STAGE_AGENDADO_MKTP).range(o, o + ps - 1)
+    );
+
+    const agendaByChannelMktp: Record<string, number> = { "Funil Completo": 0, "Vendas Diretas": 0, Parcerias: 0 };
+    for (const d of agendadosMktp) {
+      const group = getCanalGroup(String(d.canal || ""));
+      agendaByChannelMktp["Funil Completo"]++;
+      if (group === "Parcerias") agendaByChannelMktp["Parcerias"]++;
+      else agendaByChannelMktp["Vendas Diretas"]++;
+    }
+
+    const totalAgendadas = agendaByChannelMktp["Funil Completo"];
     const agendaPct = totalCapacity > 0 ? Math.round((totalAgendadas / totalCapacity) * 1000) / 10 : 0;
 
     /* ── 5c. No-show (últimos 7 dias de mktp_calendar_events) ── */
@@ -436,8 +486,8 @@ export async function GET() {
         won: { real: counts.won || 0, meta: meta.won },
       };
 
-      if (meta.orcamento != null) {
-        metrics.orcamento = { real: Math.round(totalSpend), meta: meta.orcamento };
+      if (name === "Vendas Diretas") {
+        metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       }
       if (meta.leads != null) {
         metrics.leads = { real: counts.mql || 0, meta: meta.leads };
@@ -456,8 +506,11 @@ export async function GET() {
         filterDescription: CHANNEL_FILTERS[name],
         metrics,
         lastMonthWon: prevWon[name] || 0,
-        snapshots: { aguardandoDados: snap.reserva, emContrato: snap.contrato },
-        ocupacaoAgenda: { agendadas: totalAgendadas, capacidade: totalCapacity, percent: agendaPct },
+        snapshots: {
+          aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
+          emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
+        },
+        ocupacaoAgenda: { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
         noShow: { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
         dealsHistory,
       };
