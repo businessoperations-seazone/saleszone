@@ -338,7 +338,8 @@ export async function GET(req: NextRequest) {
     // stageByDay[channel][stage][dateIdx] — stock of open deals per stage bucket per day
     // MQL = stage_order 1-4 (Lead in, Contatados, Qualificação)
     // SQL = stage_order 5-8 (Qualificado onwards)
-    // OPP = stage_order 9+ (Reunião Realizada onwards)
+    // OPP = stage_order 9-12 (Reunião Realizada onwards, excl. Reserva/Contrato)
+    // Reserva = stage_order 13, Contrato = stage_order 14
     // WON = deals won on that day (flow)
     const stageByDay: Record<string, Record<string, number[]>> = {};
     for (const ch of HIST_CHANNELS) {
@@ -346,6 +347,8 @@ export async function GET(req: NextRequest) {
         mql: new Array(N).fill(0),
         sql: new Array(N).fill(0),
         opp: new Array(N).fill(0),
+        reserva: new Array(N).fill(0),
+        contrato: new Array(N).fill(0),
         won: new Array(N).fill(0),
       };
     }
@@ -380,7 +383,7 @@ export async function GET(req: NextRequest) {
 
       // Stage bucket stock: count open deals in their current stage bucket for each day
       const so = (d as any).stage_order ?? 0;
-      const stageBucket = so >= TH_OPP ? "opp" : so >= TH_SQL ? "sql" : "mql";
+      const stageBucket = so >= TH_CONTRATO ? "contrato" : so >= TH_RESERVA ? "reserva" : so >= TH_OPP ? "opp" : so >= TH_SQL ? "sql" : "mql";
 
       if (d.status === "open") {
         for (let i = addIdx; i < N; i++) {
@@ -412,6 +415,8 @@ export async function GET(req: NextRequest) {
             mql: stageByDay[ch]["mql"][i],
             sql: stageByDay[ch]["sql"][i],
             opp: stageByDay[ch]["opp"][i],
+            reserva: stageByDay[ch]["reserva"][i],
+            contrato: stageByDay[ch]["contrato"][i],
             won: stageByDay[ch]["won"][i],
           },
         });
