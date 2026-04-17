@@ -399,8 +399,14 @@ async function syncAlignment(apiToken: string, svcKey: string) {
     start += 500;
   }
 
-  const usersRes = await pipedriveGet(apiToken, "/users");
-  const userMap = new Map(usersRes.data.map((u: any) => [u.id, u.name]));
+  const userMap = new Map<number, string>();
+  let uStart = 0;
+  while (true) {
+    const usersRes = await pipedriveGet(apiToken, "/users", { limit: "500", start: String(uStart) });
+    for (const u of usersRes.data || []) userMap.set(Number(u.id), u.name);
+    if (!usersRes.additional_data?.pagination?.more_items_in_collection) break;
+    uStart += 500;
+  }
   const counts = new Map<string, number>();
   const dealRows: Array<{deal_id: number; title: string; empreendimento: string; owner_name: string; synced_at: string}> = [];
   for (const deal of deals) {
@@ -409,7 +415,7 @@ async function syncAlignment(apiToken: string, svcKey: string) {
     // Pipeline endpoint returns user_id as integer (not object)
     const ownerId = typeof deal.user_id === "object" ? deal.user_id?.id : deal.user_id;
     if (!ownerId) continue;
-    const ownerName = userMap.get(ownerId) || String(ownerId);
+    const ownerName = userMap.get(Number(ownerId)) || String(ownerId);
     const key = `${emp}|${ownerName}`;
     counts.set(key, (counts.get(key) || 0) + 1);
     dealRows.push({

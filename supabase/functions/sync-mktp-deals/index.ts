@@ -224,11 +224,16 @@ async function syncDealsOpen(apiToken: string, supabase: any) {
   console.log(`syncDealsOpen: fetching pipeline ${PIPELINE_ID} open deals...`);
 
   // /pipelines/{id}/deals returns user_id as integer (not object with name),
-  // so fetch user list to resolve owner names
-  const usersRes = await pipedriveGet(apiToken, "/users");
-  const userMap = new Map<number, string>(
-    (usersRes.data || []).map((u: any) => [u.id, u.name])
-  );
+  // so fetch ALL users (paginated) to build complete userMap for owner name resolution
+  const userMap = new Map<number, string>();
+  let uStart = 0;
+  while (true) {
+    const usersRes = await pipedriveGet(apiToken, "/users", { limit: "500", start: String(uStart) });
+    for (const u of usersRes.data || []) userMap.set(Number(u.id), u.name);
+    if (!usersRes.additional_data?.pagination?.more_items_in_collection) break;
+    uStart += 500;
+  }
+  console.log(`  Users loaded: ${userMap.size}`);
 
   const rows: any[] = [];
   let start = 0;
@@ -244,11 +249,12 @@ async function syncDealsOpen(apiToken: string, supabase: any) {
     for (const deal of res.data) {
       // Pipeline endpoint only returns MKTP pipeline, but filter just in case
       if (deal.pipeline_id !== PIPELINE_ID) continue;
-      // Resolve owner_name from userMap since this endpoint returns user_id as integer
+      // Resolve owner_name: always prefer userMap (handles both integer and object user_id)
       const userId = typeof deal.user_id === "object" ? deal.user_id?.id : deal.user_id;
-      if (userId && typeof deal.user_id !== "object") {
-        deal.user_id = { id: userId, name: userMap.get(userId) || null };
-      }
+      const resolvedName = userId
+        ? (userMap.get(Number(userId)) ?? (typeof deal.user_id === "object" ? deal.user_id?.name : null))
+        : null;
+      deal.user_id = { id: userId, name: resolvedName };
       const stageOrder = STAGE_ORDER[deal.stage_id] || 0;
       rows.push(dealToRow(deal, stageOrder, true));
     }
