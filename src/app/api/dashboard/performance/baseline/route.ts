@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 const CLOSER_HIRE_DATES: Record<string, string> = {
   "Luana Schaikoski": "2024-03",
   "Filipe Padoveze": "auto",
-  "Hellen Dias": "auto",
+  "Karoane Izabela Soares": "auto",
 };
 
 function rate(n: number, d: number): number {

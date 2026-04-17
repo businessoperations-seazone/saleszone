@@ -45,7 +45,7 @@ const SZI_SQUADS: Squad[] = [
   },
   {
     id: 3, name: 'Squad 3', color: '#10B981',
-    marketing: 'Jean', preVenda: ['Karoane Izabela Soares'], venda: ['Hellen Dias'],
+    marketing: 'Jean', preVenda: ['Hellen Dias'], venda: ['Karoane Izabela Soares'],
     empreendimentos: ['Itacaré Spot', 'Bonito Spot II', 'Barra Grande Spot'],
   },
 ]
