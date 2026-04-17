@@ -152,7 +152,7 @@ const STAGE_COLORS: Record<string, string> = {
 };
 
 const STAGE_LABELS: Record<string, string> = {
-  mql: "MQL", sql: "SQL", opp: "OPP", won: "WON", reserva: "Ag.Dados", contrato: "Contrato",
+  mql: "MQL", sql: "SQL", opp: "OPP", won: "WON", reserva: "Reserva", contrato: "Contrato",
 };
 
 function MultiLineChart({ data }: { data: { date: string; byStage: Record<string, number> }[] }) {
