@@ -381,13 +381,19 @@ export async function GET(req: NextRequest) {
         if (closeIdx !== null) delta[ch][closeIdx]--;
       }
 
-      // Stage bucket stock: count open deals in their current stage bucket for each day
+      // Stage bucket stock: cumulative counts (deals in stage X also count in all lower stages)
+      // MQL = stage_order >= 1, SQL >= 5, OPP >= 9, Reserva >= 13, Contrato >= 14
       const so = (d as any).stage_order ?? 0;
-      const stageBucket = so >= TH_CONTRATO ? "contrato" : so >= TH_RESERVA ? "reserva" : so >= TH_OPP ? "opp" : so >= TH_SQL ? "sql" : "mql";
 
       if (d.status === "open") {
         for (let i = addIdx; i < N; i++) {
-          for (const ch of targets) stageByDay[ch][stageBucket][i]++;
+          for (const ch of targets) {
+            if (so >= TH_MQL) stageByDay[ch]["mql"][i]++;
+            if (so >= TH_SQL) stageByDay[ch]["sql"][i]++;
+            if (so >= TH_OPP) stageByDay[ch]["opp"][i]++;
+            if (so >= TH_RESERVA) stageByDay[ch]["reserva"][i]++;
+            if (so >= TH_CONTRATO) stageByDay[ch]["contrato"][i]++;
+          }
         }
       } else if (d.status === "won") {
         const wonDay = d.won_time?.substring(0, 10);
