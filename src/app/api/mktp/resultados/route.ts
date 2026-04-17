@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
+import { queryNekt } from "@/lib/nekt";
 
 /* ── Channel definitions ──────────────────────────────────── */
 const CHANNEL_ORDER = ["Funil Completo", "Vendas Diretas", "Parcerias"] as const;
@@ -281,15 +282,29 @@ export async function GET() {
       if (d.stage_id === STAGE_CONTRATO) { snapshots[group].contrato++; snapshots["Funil Completo"].contrato++; }
     }
 
+    // totalOpen: pipedrive_daily_snapshot (OK para total, atualiza 1x/dia)
     if (pdSnap) {
-      // Override Funil Completo total with more accurate pipedrive_daily_snapshot
-      const byStage = (pdSnap.by_stage || {}) as Record<string, number>;
       snapshots["Funil Completo"].totalOpen = pdSnap.total_open || 0;
-      snapshots["Funil Completo"].reserva = byStage["305"] || 0;
-      snapshots["Funil Completo"].contrato = byStage["271"] || 0;
       console.log(`[mktp/resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
-    } else {
-      console.warn("[mktp/resultados] No pipedrive_daily_snapshot for pipeline 37 — Funil Completo total is sum from mktp_deals");
+    }
+
+    // Reserva/Contrato do Funil Completo: Nekt real-time (evita stale do daily_snapshot)
+    try {
+      const nektMktp = await queryNekt(`
+        SELECT CAST(etapa AS INTEGER) as stage_id, COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 37 AND CAST(etapa AS INTEGER) IN (305, 271)
+        GROUP BY CAST(etapa AS INTEGER)
+      `);
+      for (const r of nektMktp.rows) {
+        const sid = parseInt(String(r.stage_id || "0"));
+        const cnt = parseInt(String(r.total || "0"));
+        if (sid === 305) snapshots["Funil Completo"].reserva = cnt;
+        if (sid === 271) snapshots["Funil Completo"].contrato = cnt;
+      }
+      console.log(`[mktp/resultados] Nekt reserva=${snapshots["Funil Completo"].reserva} contrato=${snapshots["Funil Completo"].contrato}`);
+    } catch (e) {
+      console.warn("[mktp/resultados] Nekt indisponível, usando mktp_deals para reserva/contrato:", e);
     }
 
     /* ── 5b. Ocupação agenda — deals abertos no stage Agendado (284) do pipeline 37 ── */
