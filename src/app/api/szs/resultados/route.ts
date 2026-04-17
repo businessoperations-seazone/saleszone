@@ -109,6 +109,22 @@ function buildEmailChannelMap(rules: { email: string }[]): Record<string, string
 const MEETINGS_PER_DAY = 16;
 const WORK_DAYS_PER_WEEK = 5;
 
+function getNektCidadeSQL(cityFilter: string | null): string {
+  if (!cityFilter) return "";
+  if (cityFilter === "São Paulo")
+    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%são paulo%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%sao paulo%')";
+  if (cityFilter === "Salvador")
+    return "AND LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%salvador%'";
+  if (cityFilter === "Florianópolis")
+    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianopolis%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianópolis%')";
+  // "Outros": não é SP, Salvador nem Floripa
+  return `AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%são paulo%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%sao paulo%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%salvador%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianopolis%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianópolis%'`;
+}
+
 interface MetricPair { real: number; meta: number }
 
 interface ChannelResult {
@@ -276,6 +292,7 @@ export async function GET(request: NextRequest) {
           SELECT etapa, canal, deal_owner_name
           FROM nekt_silver.pipedrive_deals_readable
           WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) IN (152, 76)
+          ${getNektCidadeSQL(cityFilter)}
         `);
 
 
@@ -341,21 +358,24 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Total open: pipedrive_daily_snapshot (mais confiável) > szs_open_snapshots > delta approach
-    if (pdSnap) {
-      snapshots.Geral.totalOpen = pdSnap.total_open || 0;
-      console.log(`[szs-resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
-    } else {
-      const snapRows = await paginate((o, ps) =>
-        admin.from("szs_open_snapshots").select("*").eq("date", todayStr).range(o, o + ps - 1)
-      );
-      if (snapRows.length > 0) {
-        for (const s of snapRows) {
-          snapshots.Geral.totalOpen += s.total_open || 0;
-        }
-        console.log(`[szs-resultados] Using szs_open_snapshots (today): totalOpen=${snapshots.Geral.totalOpen}`);
+    // Total open: pipedrive_daily_snapshot é pipeline-level (sem filtro de cidade).
+    // Com cityFilter, ignora pdSnap — Nekt filtra por cidade_do_imovel mais abaixo.
+    if (!cityFilter) {
+      if (pdSnap) {
+        snapshots.Geral.totalOpen = pdSnap.total_open || 0;
+        console.log(`[szs-resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
       } else {
-        console.warn("[szs-resultados] No pipedrive_daily_snapshot or szs_open_snapshots — chart will show delta-computed total (may be inaccurate)");
+        const snapRows = await paginate((o, ps) =>
+          admin.from("szs_open_snapshots").select("*").eq("date", todayStr).range(o, o + ps - 1)
+        );
+        if (snapRows.length > 0) {
+          for (const s of snapRows) {
+            snapshots.Geral.totalOpen += s.total_open || 0;
+          }
+          console.log(`[szs-resultados] Using szs_open_snapshots (today): totalOpen=${snapshots.Geral.totalOpen}`);
+        } else {
+          console.warn("[szs-resultados] No pipedrive_daily_snapshot or szs_open_snapshots — chart will show delta-computed total (may be inaccurate)");
+        }
       }
     }
 
@@ -464,17 +484,18 @@ export async function GET(request: NextRequest) {
       snapHistMap[ch] = arr;
     }
 
-    // Override último ponto do Geral com contagem real-time do Nekt (pipeline 14)
-    // szs_deals é incompleto (~11k vs 60k+ no Pipedrive), então Nekt é mais preciso
+    // Override último ponto do Geral com contagem real-time do Nekt (filtra por cidade quando ativo)
     try {
       const nektOpenSZS = await queryNekt(`
         SELECT COUNT(*) as total
         FROM nekt_silver.pipedrive_deals_readable
         WHERE status = 'open' AND pipeline_id = 14
+        ${getNektCidadeSQL(cityFilter)}
       `);
       const nektOpenTotal = parseInt(String(nektOpenSZS.rows[0]?.total || "0"));
-      console.log(`[szs-resultados] Nekt total open pipeline 14: ${nektOpenTotal}`);
+      console.log(`[szs-resultados] Nekt total open pipeline 14${cityFilter ? ` (${cityFilter})` : ""}: ${nektOpenTotal}`);
       if (nektOpenTotal > 0) {
+        snapshots.Geral.totalOpen = nektOpenTotal; // atualiza o card também
         const arr = snapHistMap["Geral"];
         if (arr && arr.length > 0) {
           const last = arr[arr.length - 1];
@@ -491,6 +512,7 @@ export async function GET(request: NextRequest) {
         SELECT *
         FROM nekt_silver.pipedrive_deals_readable
         WHERE status = 'open' AND pipeline_id = 14
+        ${getNektCidadeSQL(cityFilter)}
       `);
 
       const SZS_STAGE_ORDER_MAP: Record<number, number> = {
