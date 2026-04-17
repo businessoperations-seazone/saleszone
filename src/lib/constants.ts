@@ -32,15 +32,15 @@ export const SQUADS = [
     id: 3,
     name: "Squad 3",
     marketing: "Jean",
-    preVenda: "Hellen Dias",
-    venda: "Karoane Izabela Soares",
+    preVenda: "Karoane Izabela Soares",
+    venda: "Hellen Dias",
     empreendimentos: ["Itacaré Spot", "Bonito Spot II", "Barra Grande Spot"],
   },
 ] as const;
 
 // Pre-venda and Venda people for alignment view
-export const PV_COLS = ["Carolina Maeda", "Jeniffer Correa", "Hellen Dias"];
-export const V_COLS = ["Luana Schaikoski", "Filipe Padoveze", "Karoane Izabela Soares"];
+export const PV_COLS = ["Carolina Maeda", "Jeniffer Correa", "Karoane Izabela Soares"];
+export const V_COLS = ["Luana Schaikoski", "Filipe Padoveze", "Hellen Dias"];
 
 // Squad → índices em V_COLS (quais closers pertencem a cada squad)
 export const SQUAD_V_MAP: Record<number, number[]> = {
