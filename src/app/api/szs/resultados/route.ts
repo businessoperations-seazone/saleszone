@@ -466,9 +466,26 @@ export async function GET(request: NextRequest) {
       snapHistMap[ch] = arr;
     }
 
-    // DON'T override with snapshot — use the live szs_deals computed total (snapHistMap).
-    // The snapshot total_open from pipedrive_daily_snapshot may be stale,
-    // causing the chart to show wrong numbers. The delta-based history is authoritative.
+    // Override último ponto do Geral com contagem real-time do Nekt (pipeline 14)
+    // szs_deals é incompleto (~11k vs 60k+ no Pipedrive), então Nekt é mais preciso
+    try {
+      const nektOpenSZS = await queryNekt(`
+        SELECT COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 14
+      `);
+      const nektOpenTotal = parseInt(String(nektOpenSZS.rows[0]?.total || "0"));
+      console.log(`[szs-resultados] Nekt total open pipeline 14: ${nektOpenTotal}`);
+      if (nektOpenTotal > 0) {
+        const arr = snapHistMap["Geral"];
+        if (arr && arr.length > 0) {
+          const last = arr[arr.length - 1];
+          arr[arr.length - 1] = { ...last, total: nektOpenTotal, openTotal: nektOpenTotal };
+        }
+      }
+    } catch (e) {
+      console.warn("[szs-resultados] Nekt indisponível para open count:", e);
+    }
 
     // Accumulated: deals that reached Ag.Dados (>=11) and Contrato (>=12) this month
     // Count deals that were active in March (won/lost/open) and reached these stages
