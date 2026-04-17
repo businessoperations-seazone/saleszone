@@ -99,6 +99,8 @@ const FUNCTION_MAP: Record<string, Array<{ name: string; body?: Record<string, u
     { name: "sync-szs-deals", body: { mode: "deals-open" } },
     { name: "sync-szs-deals", body: { mode: "deals-won" } },
   ],
+  // --- Decor sync functions ---
+  "decor-presales": [{ name: "sync-decor-presales" }],
 };
 
 // DB-only modes — no external API calls, run after all API steps complete

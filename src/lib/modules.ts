@@ -104,6 +104,39 @@ const MKTP_CONFIG: ModuleConfig = {
   syncFunctions: ["mktp-dashboard-light", "mktp-meta-ads", "mktp-deals-light", "mktp-calendar", "mktp-presales"],
 };
 
+// --- Decor (Comercial Decor) — single squad, no Meta Ads ---
+
+const DECOR_SQUADS: readonly SquadDef[] = [
+  {
+    id: 1,
+    name: "Decor",
+    marketing: "",
+    preVenda: "Rubia Lorena Santos",
+    venda: "",
+    empreendimentos: [
+      "Aguardando definição", "Marista 144 Spot", "Batel Spot", "Canas Beach Spot",
+      "Urubici Spot II", "Meireles Spot", "Rosa Sul Spot", "Japaratinga Spot",
+      "Canasvieiras Spot", "Foz Spot", "Jurerê Spot II", "Santo Antônio Spot",
+      "Bonito Spot II", "Trancoso Spot", "Campeche Spot",
+    ],
+  },
+] as const;
+
+const DECOR_CONFIG: ModuleConfig = {
+  id: "decor",
+  label: "Decor",
+  shortLabel: "Decor",
+  pipelineId: 44,
+  metaAdsAccountId: "",
+  squads: DECOR_SQUADS,
+  closers: [],
+  presellers: ["Rubia Lorena Santos"],
+  squadCloserMap: {},
+  tablePrefix: "decor",
+  apiBase: "/api/decor",
+  syncFunctions: ["decor-presales"],
+};
+
 // --- SZS (Serviços) — 3 squads by canal ---
 
 const SZS_SQUADS: readonly SquadDef[] = [
@@ -157,6 +190,7 @@ export const MODULES: Record<string, ModuleConfig> = {
   szi: SZI_CONFIG,
   mktp: MKTP_CONFIG,
   szs: SZS_CONFIG,
+  decor: DECOR_CONFIG,
 };
 
 export const MODULE_IDS = Object.keys(MODULES);
