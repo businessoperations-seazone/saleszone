@@ -75,10 +75,11 @@ scripts/                     — Automações (Fireflies, heartbeats Slack)
 ## Squads e Pessoas
 | Squad | Marketing | Pré-Venda | Closers (qtd) | Empreendimentos |
 |-------|-----------|-----------|---------------|-----------------|
-| 1 | Jean | Hellen Dias | Luana Schaikoski (1) | Ponta das Canas Spot II, Itacaré Spot, Marista 144 Spot, Jurerê Spot II, Jurerê Spot III, Vistas de Anitá II |
-| 2 | Jean | Jeniffer Correa | Filipe Padoveze (1) | Barra Grande Spot, Natal Spot, Novo Campeche Spot II, Caraguá Spot, Bonito Spot II |
+| 1 | Mari | Luciana Patricio | Laura (1) | Ponta das Canas II, Itacaré, Marista 144 |
+| 2 | Jean | Natalia Saramago | Camila Santos, Filipe Padoveze (2) | Natal, Novo Campeche II, Caraguá, Bonito II |
+| 3 | Jean | Hellen Dias | Luana Schaikoski, Priscila Perrone (2) | Jurerê II, Jurerê III, Barra Grande, Vistas de Anita II |
 
-Total: 2 closers. Squads hardcoded em `src/lib/constants.ts`. Metas WON divididas por closer e distribuídas proporcionalmente por squad.
+Total: 5 closers. Squads hardcoded em `src/lib/constants.ts`. Metas WON divididas por closer e distribuídas proporcionalmente por squad.
 
 ## Convenções
 - Idioma do código: inglês
