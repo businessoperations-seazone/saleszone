@@ -63,13 +63,15 @@ export async function GET() {
     // Only keep emails that match mc.closers (excludes Samuel, Maria Vitória)
     const closerNorm = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const configClosers = mc.closers.map(closerNorm);
-    const emails = rules
-      .filter((r) => {
-        // Match email prefix (e.g. "gabriela.lemos") against closer names
-        const prefix = r.email.split("@")[0].replace(".", " ");
-        return configClosers.some((c) => c.includes(closerNorm(prefix)) || closerNorm(prefix).includes(c.split(" ")[0]));
-      })
-      .map((r) => r.email);
+    const emails = [...new Set(
+      rules
+        .filter((r) => {
+          // Match email prefix (e.g. "gabriela.lemos") against closer names
+          const prefix = r.email.split("@")[0].replace(".", " ");
+          return configClosers.some((c) => c.includes(closerNorm(prefix)) || closerNorm(prefix).includes(c.split(" ")[0]));
+        })
+        .map((r) => r.email)
+    )];
 
     // 2. Date window
     const today = new Date();
