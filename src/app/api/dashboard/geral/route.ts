@@ -269,6 +269,20 @@ export async function GET(req: NextRequest) {
     const pdTotalOpen = pdSnapshot?.total_open || 0;
     const pdByStage = (pdSnapshot?.by_stage || {}) as Record<string, number>;
 
+    // Nekt real-time open count (preferido sobre pdTotalOpen que é diário/stale)
+    let nektTotalOpen = 0;
+    try {
+      const nektOpenResult = await queryNekt(`
+        SELECT COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 28
+      `);
+      nektTotalOpen = parseInt(String(nektOpenResult.rows[0]?.total || "0"));
+      console.log(`[geral] Nekt total open pipeline 28: ${nektTotalOpen}`);
+    } catch (e) {
+      console.warn("[geral] Nekt indisponível para open count, usando pdTotalOpen:", e);
+    }
+
     // Snapshots: Geral from daily snapshot, VD/Parceiros from squad_deals
     const snaps: Record<string, { reserva: number; contrato: number }> = {};
     for (const ch of CHANNEL_ORDER) snaps[ch] = { reserva: 0, contrato: 0 };
@@ -427,7 +441,8 @@ export async function GET(req: NextRequest) {
       const arr = channelHistory[ch];
       if (!arr || arr.length === 0) continue;
       const last = arr[arr.length - 1];
-      const realOpen = ch === "Geral" && pdTotalOpen > 0 ? pdTotalOpen : openByChannel[ch];
+      const geralOpen = nektTotalOpen > 0 ? nektTotalOpen : pdTotalOpen;
+      const realOpen = ch === "Geral" && geralOpen > 0 ? geralOpen : openByChannel[ch];
       arr[arr.length - 1] = { ...last, total: realOpen, openTotal: realOpen };
     }
 
