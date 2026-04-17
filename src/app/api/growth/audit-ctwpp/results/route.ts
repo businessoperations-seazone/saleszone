@@ -52,7 +52,7 @@ export async function PATCH(req: Request) {
 
   const ALLOWED = ["tem_problema", "tag", "resumo", "problemas", "recomendacao"] as const
   for (const key of ALLOWED) {
-    if (key in patch) (lead as Record<string, unknown>)[key] = patch[key]
+    if (key in patch) (lead as unknown as Record<string, unknown>)[key] = patch[key]
   }
 
   try {
