@@ -49,7 +49,7 @@ const SZI_SQUADS: readonly SquadDef[] = [
     id: 3,
     name: "Squad 3",
     marketing: "Jean",
-    preVenda: "Karoane Soares",
+    preVenda: "Karoane Izabela Soares",
     venda: "Hellen Dias",
     empreendimentos: ["Itacaré Spot", "Bonito Spot II", "Barra Grande Spot"],
   },
@@ -63,7 +63,7 @@ const SZI_CONFIG: ModuleConfig = {
   metaAdsAccountId: "act_205286032338340",
   squads: SZI_SQUADS,
   closers: ["Luana Schaikoski", "Filipe Padoveze", "Hellen Dias"],
-  presellers: ["Carolina Maeda", "Jeniffer Correa", "Karoane Soares"],
+  presellers: ["Carolina Maeda", "Jeniffer Correa", "Karoane Izabela Soares"],
   squadCloserMap: {
     1: [0],    // Luana Schaikoski
     2: [1],    // Filipe Padoveze
