@@ -409,6 +409,7 @@ export async function GET(request: NextRequest) {
       const targets = getChannelTabs(canalGroup);
 
       if (d.status === "open") {
+        // Stock: count in current stage bucket for every day from addIdx to today
         for (let i = addIdx; i < histN; i++) {
           for (const ch of targets) {
             if (!szsStageByDay[ch]) continue;
@@ -420,10 +421,26 @@ export async function GET(request: NextRequest) {
             if (so === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
           }
         }
-      } else if (d.status === "won") {
-        const wonDay = d.won_time?.substring(0, 10);
-        if (wonDay) {
-          const wonIdx = dateIndexMap.get(wonDay);
+      } else {
+        // Won/lost: count in stage buckets during their active period (addIdx → closeIdx)
+        // so historical days show deals that were open then (not just currently-open deals)
+        const closeDay = d.status === "won" ? d.won_time?.substring(0, 10) : d.lost_time?.substring(0, 10);
+        const closeIdx = closeDay ? (dateIndexMap.get(closeDay) ?? histN - 1) : histN - 1;
+        const mso = d.max_stage_order || d.stage_order || 0;
+        for (let i = addIdx; i <= closeIdx && i < histN; i++) {
+          for (const ch of targets) {
+            if (!szsStageByDay[ch]) continue;
+            szsStageByDay[ch]["total"][i]++;
+            if (mso >= 1 && mso < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
+            if (mso >= TH_SQL_SZS) szsStageByDay[ch]["sql"][i]++;
+            if (mso >= TH_OPP_SZS) szsStageByDay[ch]["opp"][i]++;
+            if (mso === AGDADOS_ORDER_SZS) szsStageByDay[ch]["reserva"][i]++;
+            if (mso === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
+          }
+        }
+        // Won count on won_time day
+        if (d.status === "won" && closeDay) {
+          const wonIdx = dateIndexMap.get(closeDay);
           if (wonIdx !== undefined) {
             for (const ch of targets) {
               if (!szsStageByDay[ch]) continue;
