@@ -46,6 +46,7 @@ function getCanalGroup(canalId: string): string {
 
 const CHANNEL_ORDER = ["Geral", "Vendas Diretas", "Parceiros", "Expansão"] as const;
 
+
 const CHANNEL_FILTERS: Record<string, string> = {
   Geral: "Todos os canais\nExclui: Duplicado/Erro",
   "Vendas Diretas": "Inclui: Marketing, Mônica, Ind. Colaborador, Eventos, Ind. Clientes, Outros\nExclui: Expansão, Spots, Ind. Corretor, Ind. Franquia, Duplicado/Erro",
@@ -284,30 +285,83 @@ export async function GET(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    // Snapshots de Ag.Dados e Contrato de szs_open_snapshots (cobre todos os canais, incluindo Parceiros e Expansão)
-    // szs_deals exclui canais 582/583/1748/3189, por isso não serve para sub-canais
+    // Ag.Dados (stage 152) e Em Contrato (stage 76) por sub-canal via Nekt + owner_name
+    // Canal pode estar null para muitos deals → classificação por canal é instável.
+    // Owner_name (quem é responsável pelo deal) é a fonte correta para separar
+    // VD (Gabi Lemos) / Parceiros (Gabi Branco) / Expansão (Giovanna Araujo).
+    // Geral = total de todos os deals, independente do owner.
+    // Ag.Dados (stage 152) e Em Contrato (stage 76) via Nekt
     {
-      // Busca a data mais recente disponível (sync pode não ter rodado hoje)
-      const { data: latestRow } = await admin
-        .from("szs_open_snapshots")
-        .select("date")
-        .order("date", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const snapDate = latestRow?.date || todayStr;
-      const { data: openSnaps } = await admin
-        .from("szs_open_snapshots")
-        .select("canal_group, ag_dados, contrato")
-        .eq("date", snapDate);
-      console.log(`[szs-resultados] szs_open_snapshots: ${(openSnaps || []).length} rows for ${snapDate}`);
-      for (const s of openSnaps || []) {
-        const tabs = getChannelTabs(s.canal_group || "");
-        for (const tab of tabs) {
-          snapshots[tab].agDados += s.ag_dados || 0;
-          snapshots[tab].contrato += s.contrato || 0;
+      try {
+        const nektSnaps = await queryNekt(`
+          SELECT etapa, canal, deal_owner_name
+          FROM nekt_silver.pipedrive_deals_readable
+          WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) IN (152, 76)
+        `);
+
+
+        for (const ch of CHANNEL_ORDER) {
+          snapshots[ch].agDados = 0;
+          snapshots[ch].contrato = 0;
+        }
+
+        // Ambos os stages: classificar por canal do Nekt
+        // ATENÇÃO: Nekt retorna nomes completos, não abreviações
+        // Ex: "Indicação de Corretor" (não "Ind. Corretor"), "Indicaçao de Franquia" (typo sem acento)
+        const NEKT_CANAL_NAME_TO_GROUP: Record<string, string> = {
+          // VD
+          "Marketing": "Marketing",
+          "Mônica": "Mônica",
+          "Monica": "Mônica",
+          // Parceiros — nomes completos conforme Nekt
+          "Parceiros": "Parceiros",
+          "Indicação de Corretor": "Ind. Corretor",
+          "Indicacao de Corretor": "Ind. Corretor",
+          "Ind. Corretor": "Ind. Corretor",
+          "Indicação de Franquia": "Ind. Franquia",
+          "Indicaçao de Franquia": "Ind. Franquia",
+          "Indicacao de Franquia": "Ind. Franquia",
+          "Ind. Franquia": "Ind. Franquia",
+          "Indicação de Outros Parceiros": "Ind. Outros Parceiros",
+          "Ind. Outros Parceiros": "Ind. Outros Parceiros",
+          // Expansão
+          "Expansão": "Expansão",
+          "Expansao": "Expansão",
+          "Expansion": "Expansão",
+          "Spots": "Spots",
+        };
+
+
+        for (const row of nektSnaps.rows) {
+          const stageId = parseInt(String(row.etapa || "0"));
+          const canalName = String(row.canal || "");
+          const canalGroup = NEKT_CANAL_NAME_TO_GROUP[canalName] || "Outros";
+          const tabs = getChannelTabs(canalGroup);
+          for (const tab of tabs) {
+            if (stageId === 152) snapshots[tab].agDados++;
+            if (stageId === 76) snapshots[tab].contrato++;
+          }
+        }
+
+        // Geral = total real (todos os deals)
+        snapshots.Geral.agDados = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 152).length;
+        snapshots.Geral.contrato = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 76).length;
+        console.log(`[szs-resultados] ag/contrato: Geral=${snapshots.Geral.agDados}/${snapshots.Geral.contrato}, VD=${snapshots["Vendas Diretas"].agDados}/${snapshots["Vendas Diretas"].contrato}, Parc=${snapshots.Parceiros.agDados}/${snapshots.Parceiros.contrato}, Exp=${snapshots["Expansão"].agDados}/${snapshots["Expansão"].contrato}`);
+      } catch (e) {
+        console.warn("[szs-resultados] Nekt indisponível para ag/contrato, usando szs_open_snapshots:", e);
+        const { data: latestRow } = await admin.from("szs_open_snapshots").select("date").order("date", { ascending: false }).limit(1).maybeSingle();
+        const snapDate = latestRow?.date || todayStr;
+        const { data: openSnaps } = await admin.from("szs_open_snapshots").select("canal_group, ag_dados, contrato").eq("date", snapDate);
+        for (const s of openSnaps || []) {
+          const tabs = getChannelTabs(s.canal_group || "");
+          for (const tab of tabs) {
+            snapshots[tab].agDados += s.ag_dados || 0;
+            snapshots[tab].contrato += s.contrato || 0;
+          }
         }
       }
     }
+
     // Total open: pipedrive_daily_snapshot (mais confiável) > szs_open_snapshots > delta approach
     if (pdSnap) {
       snapshots.Geral.totalOpen = pdSnap.total_open || 0;
