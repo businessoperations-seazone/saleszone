@@ -50,8 +50,18 @@ export async function PATCH(req: Request) {
   const lead = data.leads.find(l => l.deal_id === deal_id)
   if (!lead) return NextResponse.json({ error: "lead_not_found" }, { status: 404 })
 
-  Object.assign(lead, patch)
-  await writeAuditCTWPP(date, data)
+  const ALLOWED = ["tem_problema", "tag", "resumo", "problemas", "recomendacao"] as const
+  for (const key of ALLOWED) {
+    if (key in patch) (lead as Record<string, unknown>)[key] = patch[key]
+  }
 
+  try {
+    await writeAuditCTWPP(date, data)
+  } catch (err) {
+    console.error("[audit-ctwpp PATCH] write failed", { date, deal_id, err })
+    return NextResponse.json({ error: "write_failed" }, { status: 500 })
+  }
+
+  console.log("[audit-ctwpp PATCH] patched", { date, deal_id, patch })
   return NextResponse.json({ ok: true, date, deal_id, updated: patch })
 }
