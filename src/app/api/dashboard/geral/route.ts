@@ -335,14 +335,18 @@ export async function GET(req: NextRequest) {
     const delta: Record<string, number[]> = {};
     for (const ch of HIST_CHANNELS) delta[ch] = new Array(N + 1).fill(0);
 
-    // dailyEvents[channel][stage][dateIdx] — event count per day per stage (MultiLineChart)
-    // MQL uses add_time, SQL uses qualificacao_date, OPP uses reuniao_date
-    const dailyEvents: Record<string, Record<string, number[]>> = {};
+    // stageByDay[channel][stage][dateIdx] — stock of open deals per stage bucket per day
+    // MQL = stage_order 1-4 (Lead in, Contatados, Qualificação)
+    // SQL = stage_order 5-8 (Qualificado onwards)
+    // OPP = stage_order 9+ (Reunião Realizada onwards)
+    // WON = deals won on that day (flow)
+    const stageByDay: Record<string, Record<string, number[]>> = {};
     for (const ch of HIST_CHANNELS) {
-      dailyEvents[ch] = {
+      stageByDay[ch] = {
         mql: new Array(N).fill(0),
         sql: new Array(N).fill(0),
         opp: new Array(N).fill(0),
+        won: new Array(N).fill(0),
       };
     }
 
@@ -374,33 +378,26 @@ export async function GET(req: NextRequest) {
         if (closeIdx !== null) delta[ch][closeIdx]--;
       }
 
-      // Daily events per stage using stage-specific dates
-      // MQL: add_time (exclude indicação for Vendas Diretas)
-      const mqlIdx = dateIndex.get(addDay);
-      if (mqlIdx !== undefined) {
-        for (const ch of targets) dailyEvents[ch]["mql"][mqlIdx]++;
-      }
+      // Stage bucket stock: count open deals in their current stage bucket for each day
+      const so = (d as any).stage_order ?? 0;
+      const stageBucket = so >= TH_OPP ? "opp" : so >= TH_SQL ? "sql" : "mql";
 
-      // SQL: qualificacao_date
-      const sqlDay = (d as any).qualificacao_date?.substring(0, 10);
-      if (sqlDay) {
-        const sqlIdx = dateIndex.get(sqlDay);
-        if (sqlIdx !== undefined) {
-          for (const ch of targets) dailyEvents[ch]["sql"][sqlIdx]++;
+      if (d.status === "open") {
+        for (let i = addIdx; i < N; i++) {
+          for (const ch of targets) stageByDay[ch][stageBucket][i]++;
         }
-      }
-
-      // OPP: reuniao_date
-      const oppDay = (d as any).reuniao_date?.substring(0, 10);
-      if (oppDay) {
-        const oppIdx = dateIndex.get(oppDay);
-        if (oppIdx !== undefined) {
-          for (const ch of targets) dailyEvents[ch]["opp"][oppIdx]++;
+      } else if (d.status === "won") {
+        const wonDay = d.won_time?.substring(0, 10);
+        if (wonDay) {
+          const wonIdx = dateIndex.get(wonDay);
+          if (wonIdx !== undefined) {
+            for (const ch of targets) stageByDay[ch]["won"][wonIdx]++;
+          }
         }
       }
     }
 
-    // Build channelHistory: cumulative total (stock) + daily events per stage (flow)
+    // Build channelHistory: cumulative total (stock) + stage bucket stock per day
     const channelHistory: Record<string, { date: string; total: number; openTotal: number; byStage: Record<string, number> }[]> = {};
     for (const ch of HIST_CHANNELS) {
       const arr: { date: string; total: number; openTotal: number; byStage: Record<string, number> }[] = [];
@@ -412,9 +409,10 @@ export async function GET(req: NextRequest) {
           total: cumTotal,
           openTotal: cumTotal,
           byStage: {
-            mql: dailyEvents[ch]["mql"][i],
-            sql: dailyEvents[ch]["sql"][i],
-            opp: dailyEvents[ch]["opp"][i],
+            mql: stageByDay[ch]["mql"][i],
+            sql: stageByDay[ch]["sql"][i],
+            opp: stageByDay[ch]["opp"][i],
+            won: stageByDay[ch]["won"][i],
           },
         });
       }
