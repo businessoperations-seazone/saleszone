@@ -551,8 +551,11 @@ export async function GET(req: NextRequest) {
       // All channels get snapshots
       result.snapshots = snap;
       const chAgendadas = agendaByChannel[name] ?? 0;
-      result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
-      result.ocupacaoAgenda = { agendadas: chAgendadas, capacidade, percent: capacidade > 0 ? Math.round((chAgendadas / capacidade) * 1000) / 10 : 0 };
+      // Parceiros não tem reuniões — zera No-Show e Ocupação Agenda
+      if (name !== "Parceiros") {
+        result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
+        result.ocupacaoAgenda = { agendadas: chAgendadas, capacidade, percent: capacidade > 0 ? Math.round((chAgendadas / capacidade) * 1000) / 10 : 0 };
+      }
 
       // Geral: reservaHistory (latest accumulated values)
       if (name === "Geral") {

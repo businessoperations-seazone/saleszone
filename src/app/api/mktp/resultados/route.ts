@@ -510,8 +510,9 @@ export async function GET() {
           aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
           emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
         },
-        ocupacaoAgenda: { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
-        noShow: { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
+        // Parcerias não tem reuniões — zera No-Show e Ocupação Agenda
+        ocupacaoAgenda: name === "Parcerias" ? { agendadas: 0, capacidade: 0, percent: 0 } : { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
+        noShow: name === "Parcerias" ? { canceladas: 0, total: 0, percent: 0 } : { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
         dealsHistory,
       };
     });
