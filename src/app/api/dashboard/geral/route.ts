@@ -388,7 +388,7 @@ export async function GET(req: NextRequest) {
       if (d.status === "open") {
         for (let i = addIdx; i < N; i++) {
           for (const ch of targets) {
-            if (so >= TH_MQL) stageByDay[ch]["mql"][i]++;
+            if (so >= TH_MQL && so < TH_SQL) stageByDay[ch]["mql"][i]++;
             if (so >= TH_SQL) stageByDay[ch]["sql"][i]++;
             if (so >= TH_OPP) stageByDay[ch]["opp"][i]++;
             if (so >= TH_RESERVA) stageByDay[ch]["reserva"][i]++;
