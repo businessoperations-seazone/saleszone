@@ -80,7 +80,7 @@ const SZS_EMP_OPTIONS: Record<number, string> = {}
 const MKT_SQUADS: Squad[] = [
   {
     id: 1, name: 'Marketplace', color: '#0EA5E9',
-    marketing: '', preVenda: ['Karoane Izabela Soares', 'Karoline Borges'], venda: [],
+    marketing: '', preVenda: ['Karoline Borges'], venda: [],
     empreendimentos: [
       'Foz Spot', 'Rosa Sul Spot', 'Cachoeira Beach Spot', 'Meireles Spot',
       'Ilha do Campeche II Spot', 'Ingleses Spot', 'Bonito Spot', 'Santinho Spot',
