@@ -455,6 +455,52 @@ export async function GET(req: NextRequest) {
       arr[arr.length - 1] = { ...last, total: realOpen, openTotal: realOpen };
     }
 
+    // Reserva/Contrato em tempo real via Nekt (stages 191/192 pipeline 28)
+    // Sobrescreve o último ponto do byStage para todos os canais
+    const nektReservaByChannel: Record<string, { reserva: number; contrato: number }> = {
+      Geral: { reserva: 0, contrato: 0 },
+      "Vendas Diretas": { reserva: 0, contrato: 0 },
+      Parceiros: { reserva: 0, contrato: 0 },
+    };
+    try {
+      const nektStages = await queryNekt(`
+        SELECT CAST(etapa AS INTEGER) as stage_id, canal_id, canal
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 28 AND CAST(etapa AS INTEGER) IN (191, 192)
+      `);
+      for (const r of nektStages.rows) {
+        const sid = parseInt(String(r.stage_id || "0"));
+        const canalId = String(r.canal_id ?? r.canal ?? "");
+        const macro = getMacroChannel(canalId);
+        if (sid === 191) {
+          nektReservaByChannel.Geral.reserva++;
+          if (macro === "Vendas Diretas") nektReservaByChannel["Vendas Diretas"].reserva++;
+          else if (macro === "Parceiros") nektReservaByChannel.Parceiros.reserva++;
+        } else if (sid === 192) {
+          nektReservaByChannel.Geral.contrato++;
+          if (macro === "Vendas Diretas") nektReservaByChannel["Vendas Diretas"].contrato++;
+          else if (macro === "Parceiros") nektReservaByChannel.Parceiros.contrato++;
+        }
+      }
+      console.log(`[geral/nekt-stages] reserva/contrato:`, JSON.stringify(nektReservaByChannel));
+      for (const ch of HIST_CHANNELS) {
+        const arr = channelHistory[ch];
+        if (!arr || arr.length === 0) continue;
+        const last = arr[arr.length - 1];
+        const nr = nektReservaByChannel[ch];
+        arr[arr.length - 1] = {
+          ...last,
+          byStage: {
+            ...last.byStage,
+            reserva: nr.reserva,   // exclusivo: deals no stage 191
+            contrato: nr.contrato, // exclusivo: deals no stage 192
+          },
+        };
+      }
+    } catch (e) {
+      console.warn("[geral] Nekt indisponível para reserva/contrato stages:", e);
+    }
+
     // ── 8. Ocupação Agenda + No-Show ──
     // Agendadas = deals abertos no stage "Agendado" (187) do pipeline 28
     // Capacidade = nClosers × 16 slots/dia × 5 dias
