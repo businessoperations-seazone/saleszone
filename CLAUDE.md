@@ -73,13 +73,13 @@ scripts/                     — Automações (Fireflies, heartbeats Slack)
 - Tabelas, Edge Functions, pg_cron, armadilhas Pipedrive/Meta/Supabase → `supabase/CLAUDE.md`
 
 ## Squads e Pessoas
-| Squad | Marketing | Pré-Venda | Closers (qtd) | Empreendimentos |
-|-------|-----------|-----------|---------------|-----------------|
-| 1 | Mari | Luciana Patricio | Laura (1) | Ponta das Canas II, Itacaré, Marista 144 |
-| 2 | Jean | Natalia Saramago | Camila Santos, Filipe Padoveze (2) | Natal, Novo Campeche II, Caraguá, Bonito II |
-| 3 | Jean | Hellen Dias | Luana Schaikoski, Priscila Perrone (2) | Jurerê II, Jurerê III, Barra Grande, Vistas de Anita II |
+| Squad | Marketing | Pré-Venda (SDR) | Closer | Empreendimentos |
+|-------|-----------|-----------------|--------|-----------------|
+| 1 | Jean | Carolina Maeda | Luana Schaikoski | Ponta das Canas Spot II, Marista 144 Spot, Jurerê Spot II, Jurerê Spot III, Vistas de Anitá II |
+| 2 | Jean | Jeniffer Correa | Filipe Padoveze | Natal Spot, Novo Campeche Spot II, Caraguá Spot |
+| 3 | Jean | Karoane Izabela Soares | Hellen Dias | Itacaré Spot, Bonito Spot II, Barra Grande Spot |
 
-Total: 5 closers. Squads hardcoded em `src/lib/constants.ts`. Metas WON divididas por closer e distribuídas proporcionalmente por squad.
+Total: 3 closers. Squads hardcoded em `src/lib/constants.ts`. Metas WON divididas por closer e distribuídas proporcionalmente por squad.
 
 ## Convenções
 - Idioma do código: inglês
