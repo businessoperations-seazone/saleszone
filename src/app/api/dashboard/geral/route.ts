@@ -464,12 +464,12 @@ export async function GET(req: NextRequest) {
     };
     try {
       const nektStages = await queryNekt(`
-        SELECT CAST(etapa AS INTEGER) as stage_id, canal_id, canal
+        SELECT *
         FROM nekt_silver.pipedrive_deals_readable
         WHERE status = 'open' AND pipeline_id = 28 AND CAST(etapa AS INTEGER) IN (191, 192)
       `);
       for (const r of nektStages.rows) {
-        const sid = parseInt(String(r.stage_id || "0"));
+        const sid = parseInt(String(r.etapa || "0"));
         const canalId = String(r.canal_id ?? r.canal ?? "");
         const macro = getMacroChannel(canalId);
         if (sid === 191) {
