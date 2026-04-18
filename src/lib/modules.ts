@@ -134,7 +134,7 @@ const DECOR_CONFIG: ModuleConfig = {
   squadCloserMap: {},
   tablePrefix: "decor",
   apiBase: "/api/decor",
-  syncFunctions: ["decor-presales"],
+  syncFunctions: ["decor-presales", "decor-deals-light"],
 };
 
 // --- SZS (Serviços) — 3 squads by canal ---
