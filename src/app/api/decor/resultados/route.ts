@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
-import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
-import { paginate } from "@/lib/paginate";
+import { createClient } from "@supabase/supabase-js";
 
-/* ── Channel definitions ──────────────────────────────────── */
-const CHANNEL_ORDER = ["Funil Completo", "Vendas Diretas", "Parcerias"] as const;
-type MktpChannel = (typeof CHANNEL_ORDER)[number];
+const PIPEDRIVE_DOMAIN = "seazone-fd92b9.pipedrive.com";
+const PIPELINE_ID = 44;
+const FIELD_CANAL = "93b3ada8b94bd1fc4898a25754d6bcac2713f835";
 
-const CHANNEL_FILTERS: Record<MktpChannel, string> = {
-  "Vendas Diretas": "canal NOT IN (582, 583, 2876) — todos os canais exceto parcerias",
-  Parcerias: "canal IN (582, 583, 2876) — Indicação Corretor + Franquia + Outros Parceiros",
-  "Funil Completo": "Todos os canais combinados",
+const CHANNEL_ORDER = ["Geral", "Vendas Diretas", "Parcerias"] as const;
+type DecorChannel = (typeof CHANNEL_ORDER)[number];
+
+const CHANNEL_FILTERS: Record<DecorChannel, string> = {
+  Geral: "Todos os canais combinados",
+  "Vendas Diretas": "Todos os canais exceto parcerias",
+  Parcerias: "Indicação Corretor + Franquia + Outros Parceiros",
 };
 
 const PARCERIA_CANAL_IDS = new Set(["582", "583", "2876"]);
@@ -18,49 +20,38 @@ function getCanalGroup(canalId: string): "Vendas Diretas" | "Parcerias" {
   return PARCERIA_CANAL_IDS.has(canalId) ? "Parcerias" : "Vendas Diretas";
 }
 
-/* ── Stage IDs (pipeline 37) ─────────────────────────────── */
-const STAGE_RESERVA = 305;
-const STAGE_CONTRATO = 271;
-
-/* ── Metas (preencher com valores reais) ─────────────────── */
+/* ── Metas (hardcoded por mês) ───────────────────────────────── */
 interface ChannelMetas {
-  orcamento?: number;
-  leads?: number;
   mql: number;
   sql: number;
   opp: number;
   won: number;
-  reserva?: number;
-  contrato?: number;
 }
 
-const Decor_RESULTADOS_METAS: Record<string, Record<string, ChannelMetas>> = {
+const DECOR_METAS: Record<string, Record<string, ChannelMetas>> = {
   "2026-03": {
-    "Vendas Diretas": { leads: 3354, mql: 1677, sql: 530, opp: 126, won: 9 },
+    Geral: { mql: 1708, sql: 553, opp: 143, won: 15 },
+    "Vendas Diretas": { mql: 1677, sql: 530, opp: 126, won: 9 },
     Parcerias: { mql: 31, sql: 23, opp: 17, won: 6 },
-    "Funil Completo": { mql: 1436, sql: 479, opp: 132, won: 15, reserva: 25, contrato: 18 },
   },
 };
 
-/* ── Types ────────────────────────────────────────────────── */
+/* ── Types ────────────────────────────────────────────────────── */
 interface MetricPair { real: number; meta: number }
 
 interface ChannelResult {
   name: string;
   filterDescription: string;
   metrics: {
-    orcamento?: MetricPair;
-    leads?: MetricPair;
     mql: MetricPair;
     sql: MetricPair;
     opp: MetricPair;
     won: MetricPair;
-    reserva?: MetricPair;
-    contrato?: MetricPair;
   };
   lastMonthWon: number;
   snapshots: { aguardandoDados: number; emContrato: number };
   ocupacaoAgenda: { agendadas: number; capacidade: number; percent: number };
+  noShow: { canceladas: number; total: number; percent: number };
   dealsHistory: { date: string; total: number; byStage: Record<string, number> }[];
 }
 
@@ -70,295 +61,120 @@ interface ResultadosDecorData {
 }
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-/* ── Tab → date column in decor_deals ─────────────────────── */
-const TAB_DATE_COL: Record<string, string> = {
-  mql: "add_time",
-  sql: "qualificacao_date",
-  opp: "reuniao_date",
-  won: "won_time",
-};
-
-const TABS = ["mql", "sql", "opp", "won"] as const;
+async function pipeFetch(token: string, path: string, params: Record<string, string> = {}) {
+  const url = new URL(`https://${PIPEDRIVE_DOMAIN}/api/v1${path}`);
+  url.searchParams.set("api_token", token);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url.toString(), { cache: "no-store" });
+  if (!res.ok) throw new Error(`Pipedrive ${path}: ${res.status}`);
+  return res.json();
+}
 
 export async function GET() {
   try {
-    const admin = createSquadSupabaseAdmin();
+    const srvClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+
+    const { data: tokenData } = await srvClient.rpc("vault_read_secret", { secret_name: "PIPEDRIVE_API_TOKEN" });
+    const token = typeof tokenData === "string" ? tokenData : "";
+    if (!token) throw new Error("PIPEDRIVE_API_TOKEN not found in vault");
+
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
-    const startDate = `${monthKey}-01`;
+    const monthStart = `${monthKey}-01`;
 
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
     const prevStart = `${prevKey}-01`;
     const prevEnd = `${prevKey}-${new Date(prevDate.getFullYear(), prevDate.getMonth() + 1, 0).getDate()}`;
 
-    const cutoff90 = new Date(now);
-    cutoff90.setDate(cutoff90.getDate() - 90);
-    const cutoffDate = cutoff90.toISOString().substring(0, 10);
-
-    const DEAL_COLS = "canal, status, stage_id, max_stage_order, add_time, won_time, lost_time, qualificacao_date, reuniao_date, lost_reason";
-
-    /* ── 1. Fetch all deals from decor_deals for current + previous month + 90d history ── */
-    const allDeals = await paginate((o, ps) =>
-      admin
-        .from("decor_deals")
-        .select(DEAL_COLS)
-        .gte("add_time", cutoffDate)
-        .range(o, o + ps - 1)
-    );
-
-    // Also fetch won deals that may have add_time before cutoff but won_time in range
-    const wonDeals = await paginate((o, ps) =>
-      admin
-        .from("decor_deals")
-        .select(DEAL_COLS)
-        .eq("status", "won")
-        .gte("won_time", prevStart)
-        .lt("add_time", cutoffDate)
-        .range(o, o + ps - 1)
-    );
-
-    // Merge, dedup by combining (won deals with old add_time but recent won_time)
-    const dealMap = new Map<string, any>();
-    for (const d of allDeals) {
-      const key = `${d.canal}|${d.add_time}|${d.status}|${d.stage_id}`;
-      dealMap.set(key, d);
-    }
-    for (const d of wonDeals) {
-      const key = `${d.canal}|${d.add_time}|${d.status}|${d.stage_id}`;
-      dealMap.set(key, d);
-    }
-    const deals = Array.from(dealMap.values());
-
-    /* ── 2. Count funnel by channel for current month ──────── */
-    const channelCounts: Record<string, Record<string, number>> = {};
-    for (const ch of CHANNEL_ORDER) channelCounts[ch] = {};
-
-    for (const deal of deals) {
-      const group = getCanalGroup(String(deal.canal || ""));
-      for (const tab of TABS) {
-        const dateCol = TAB_DATE_COL[tab];
-        const dateVal = deal[dateCol];
-        if (!dateVal) continue;
-        const day = dateVal.substring(0, 10);
-        if (day < startDate) continue; // only current month
-        channelCounts[group][tab] = (channelCounts[group][tab] || 0) + 1;
-        channelCounts["Funil Completo"][tab] = (channelCounts["Funil Completo"][tab] || 0) + 1;
+    /* ── 1. Open deals from pipeline 44 ───────────────────────── */
+    const openByGroup: Record<DecorChannel, number> = { Geral: 0, "Vendas Diretas": 0, Parcerias: 0 };
+    let start = 0;
+    while (true) {
+      const res = await pipeFetch(token, `/pipelines/${PIPELINE_ID}/deals`, {
+        limit: "500", start: String(start), everyone: "1",
+      });
+      if (!res.data || res.data.length === 0) break;
+      for (const deal of res.data) {
+        if (deal.pipeline_id !== PIPELINE_ID) continue;
+        const canalId = String(deal[FIELD_CANAL] || "");
+        const group = getCanalGroup(canalId);
+        openByGroup[group]++;
+        openByGroup.Geral++;
       }
+      if (!res.additional_data?.pagination?.more_items_in_collection) break;
+      start += 500;
     }
 
-    /* ── 3. Previous month WON ─────────────────────────────── */
-    const prevWon: Record<string, number> = {};
-    for (const deal of deals) {
-      if (deal.status !== "won") continue;
-      const wonDate = deal.won_time?.substring(0, 10);
-      if (!wonDate || wonDate < prevStart || wonDate > prevEnd) continue;
-      const group = getCanalGroup(String(deal.canal || ""));
-      prevWon[group] = (prevWon[group] || 0) + 1;
-      prevWon["Funil Completo"] = (prevWon["Funil Completo"] || 0) + 1;
-    }
+    /* ── 2. Won deals — current month ─────────────────────────── */
+    const wonByGroup: Record<DecorChannel, number> = { Geral: 0, "Vendas Diretas": 0, Parcerias: 0 };
+    const prevWonByGroup: Record<DecorChannel, number> = { Geral: 0, "Vendas Diretas": 0, Parcerias: 0 };
+    start = 0;
+    // Walk won deals; stop when won_time is far before monthStart (deals sorted by id desc)
+    let pagesWithoutMatch = 0;
+    while (pagesWithoutMatch < 3) {
+      const res = await pipeFetch(token, "/deals", {
+        status: "won", limit: "500", start: String(start), everyone: "1",
+      });
+      if (!res.data || res.data.length === 0) break;
+      let pageHadMatch = false;
+      for (const deal of res.data) {
+        if (deal.pipeline_id !== PIPELINE_ID) continue;
+        const wonTime = deal.won_time?.substring(0, 10) || "";
+        const canalId = String(deal[FIELD_CANAL] || "");
+        const group = getCanalGroup(canalId);
 
-    /* ── 3b. Reserva/Contrato acumulado no mês (coorte de deals fechados) ── */
-    // Deals fechados no mês (won ou lost) que passaram por Reserva (max_stage_order >= 12)
-    // ou Contrato (max_stage_order >= 13). Exclui Duplicado/Erro em JS (neq exclui NULLs).
-    const RESERVA_MIN_ORDER = 12;
-    const CONTRATO_MIN_ORDER = 13;
-
-    const funnelReserva: Record<string, number> = {};
-    const funnelContrato: Record<string, number> = {};
-    for (const ch of CHANNEL_ORDER) { funnelReserva[ch] = 0; funnelContrato[ch] = 0; }
-
-    for (const deal of deals) {
-      if (deal.lost_reason === "Duplicado/Erro") continue;
-      // Deal must have closed in current month (won or lost)
-      const closeDate = deal.status === "won" ? deal.won_time?.substring(0, 10) : deal.lost_time?.substring(0, 10);
-      const isOpen = deal.status === "open";
-      // Include open deals too (they're currently in the funnel)
-      if (!isOpen && (!closeDate || closeDate < startDate)) continue;
-
-      const mso = deal.max_stage_order || 0;
-      const group = getCanalGroup(String(deal.canal || ""));
-
-      if (mso >= RESERVA_MIN_ORDER) {
-        funnelReserva[group]++;
-        funnelReserva["Funil Completo"]++;
-      }
-      if (mso >= CONTRATO_MIN_ORDER) {
-        funnelContrato[group]++;
-        funnelContrato["Funil Completo"]++;
-      }
-    }
-
-    /* ── 4. Meta Ads spend ─────────────────────────────────── */
-    const metaRows = await paginate((o, ps) =>
-      admin.from("decor_meta_ads").select("spend_month").range(o, o + ps - 1)
-    );
-    let totalSpend = 0;
-    for (const r of metaRows) totalSpend += r.spend_month || 0;
-
-    /* ── 5. Snapshots from open deals ──────────────────────── */
-    const snapshotDeals = await paginate((o, ps) =>
-      admin
-        .from("decor_deals")
-        .select("stage_id, canal")
-        .eq("status", "open")
-        .in("stage_id", [STAGE_RESERVA, STAGE_CONTRATO])
-        .range(o, o + ps - 1)
-    );
-
-    const snapshots: Record<string, { reserva: number; contrato: number }> = {};
-    for (const ch of CHANNEL_ORDER) snapshots[ch] = { reserva: 0, contrato: 0 };
-
-    for (const d of snapshotDeals) {
-      const group = getCanalGroup(String(d.canal || ""));
-      if (d.stage_id === STAGE_RESERVA) {
-        snapshots[group].reserva++;
-        snapshots["Funil Completo"].reserva++;
-      } else if (d.stage_id === STAGE_CONTRATO) {
-        snapshots[group].contrato++;
-        snapshots["Funil Completo"].contrato++;
-      }
-    }
-
-    /* ── 5b. Ocupação agenda (decor_calendar_events, próximos 7 dias) ── */
-    const today = now.toISOString().substring(0, 10);
-    const next7 = new Date(now);
-    next7.setDate(next7.getDate() + 7);
-    const next7Date = next7.toISOString().substring(0, 10);
-
-    const calendarEvents = await paginate((o, ps) =>
-      admin
-        .from("decor_calendar_events")
-        .select("closer_name")
-        .gte("dia", today)
-        .lte("dia", next7Date)
-        .eq("cancelou", false)
-        .range(o, o + ps - 1)
-    );
-
-    const CLOSERS = ["Nevine Saratt", "Willian Miranda"];
-    const MEETINGS_PER_DAY = 16;
-    const WORK_DAYS = 5;
-    const totalCapacity = CLOSERS.length * MEETINGS_PER_DAY * WORK_DAYS;
-    const totalAgendadas = calendarEvents.length;
-    const agendaPct = totalCapacity > 0 ? Math.round((totalAgendadas / totalCapacity) * 1000) / 10 : 0;
-
-    /* ── 6. History — cumulative open deals from decor_deals ── */
-    // Fetch ALL open deals with max_stage_order to build both charts.
-    // Stage thresholds (same as sync-mktp-deals): MQL>=1, SQL>=5, OPP>=9, WON=won
-    const openDeals = await paginate((o, ps) =>
-      admin
-        .from("decor_deals")
-        .select("canal, add_time, max_stage_order")
-        .eq("status", "open")
-        .not("add_time", "is", null)
-        .range(o, o + ps - 1)
-    );
-
-    const STAGE_THRESHOLDS = { mql: 1, sql: 5, opp: 9 } as const;
-
-    // Group open deals by date, canal group, and stage
-    type DailyEntry = { total: number; mql: number; sql: number; opp: number };
-    const dailyByGroup: Record<string, Map<string, DailyEntry>> = {};
-    const baselineByGroup: Record<string, DailyEntry> = {};
-    for (const ch of CHANNEL_ORDER) {
-      dailyByGroup[ch] = new Map();
-      baselineByGroup[ch] = { total: 0, mql: 0, sql: 0, opp: 0 };
-    }
-
-    for (const d of openDeals) {
-      const day = d.add_time.substring(0, 10);
-      const group = getCanalGroup(String(d.canal || ""));
-      const mso = d.max_stage_order || 0;
-      const targets = [group, "Funil Completo"] as const;
-
-      if (day < cutoffDate) {
-        // Baseline: deals before 90-day window
-        for (const ch of targets) {
-          baselineByGroup[ch].total++;
-          if (mso >= STAGE_THRESHOLDS.mql) baselineByGroup[ch].mql++;
-          if (mso >= STAGE_THRESHOLDS.sql) baselineByGroup[ch].sql++;
-          if (mso >= STAGE_THRESHOLDS.opp) baselineByGroup[ch].opp++;
-        }
-      } else {
-        for (const ch of targets) {
-          const map = dailyByGroup[ch];
-          if (!map.has(day)) map.set(day, { total: 0, mql: 0, sql: 0, opp: 0 });
-          const e = map.get(day)!;
-          e.total++;
-          if (mso >= STAGE_THRESHOLDS.mql) e.mql++;
-          if (mso >= STAGE_THRESHOLDS.sql) e.sql++;
-          if (mso >= STAGE_THRESHOLDS.opp) e.opp++;
+        if (wonTime >= monthStart) {
+          wonByGroup[group]++;
+          wonByGroup.Geral++;
+          pageHadMatch = true;
+        } else if (wonTime >= prevStart && wonTime <= prevEnd) {
+          prevWonByGroup[group]++;
+          prevWonByGroup.Geral++;
+          pageHadMatch = true;
         }
       }
+      if (!res.additional_data?.pagination?.more_items_in_collection) break;
+      start += 500;
+      pagesWithoutMatch = pageHadMatch ? 0 : pagesWithoutMatch + 1;
     }
 
-    // Build cumulative history per channel (total + per-stage)
-    const cumulativeHist: Record<string, { date: string; total: number; byStage: Record<string, number> }[]> = {};
-    for (const ch of CHANNEL_ORDER) {
-      const dailyMap = dailyByGroup[ch];
-      const dates = Array.from(dailyMap.keys()).sort();
-      const cum = { ...baselineByGroup[ch] };
-      const arr: { date: string; total: number; byStage: Record<string, number> }[] = [];
-      for (const date of dates) {
-        const e = dailyMap.get(date)!;
-        cum.total += e.total;
-        cum.mql += e.mql;
-        cum.sql += e.sql;
-        cum.opp += e.opp;
-        arr.push({ date, total: cum.total, byStage: { mql: cum.mql, sql: cum.sql, opp: cum.opp } });
-      }
-      cumulativeHist[ch] = arr;
-    }
-
-    /* ── 7. Build response ─────────────────────────────────── */
-    const metas = Decor_RESULTADOS_METAS[monthKey] || {};
+    /* ── 3. Build channels ────────────────────────────────────── */
+    const metas = DECOR_METAS[monthKey] || {};
 
     const channels: ChannelResult[] = CHANNEL_ORDER.map((name) => {
-      const counts = channelCounts[name] || {};
       const meta = metas[name] || { mql: 0, sql: 0, opp: 0, won: 0 };
-      const snap = snapshots[name];
-
-      const metrics: ChannelResult["metrics"] = {
-        mql: { real: counts.mql || 0, meta: meta.mql },
-        sql: { real: counts.sql || 0, meta: meta.sql },
-        opp: { real: counts.opp || 0, meta: meta.opp },
-        won: { real: counts.won || 0, meta: meta.won },
-      };
-
-      if (meta.orcamento != null) {
-        metrics.orcamento = { real: Math.round(totalSpend), meta: meta.orcamento };
-      }
-      if (meta.leads != null) {
-        metrics.leads = { real: counts.mql || 0, meta: meta.leads };
-      }
-      if (meta.reserva != null) {
-        metrics.reserva = { real: funnelReserva[name] || 0, meta: meta.reserva };
-      }
-      if (meta.contrato != null) {
-        metrics.contrato = { real: funnelContrato[name] || 0, meta: meta.contrato };
-      }
-
-      const dealsHistory = cumulativeHist[name] || [];
+      const open = openByGroup[name];
+      const won = wonByGroup[name];
 
       return {
         name,
         filterDescription: CHANNEL_FILTERS[name],
-        metrics,
-        lastMonthWon: prevWon[name] || 0,
-        snapshots: { aguardandoDados: snap.reserva, emContrato: snap.contrato },
-        ocupacaoAgenda: { agendadas: totalAgendadas, capacidade: totalCapacity, percent: agendaPct },
-        dealsHistory,
+        metrics: {
+          mql: { real: open + won, meta: meta.mql },
+          sql: { real: 0, meta: meta.sql },
+          opp: { real: 0, meta: meta.opp },
+          won: { real: won, meta: meta.won },
+        },
+        lastMonthWon: prevWonByGroup[name],
+        snapshots: { aguardandoDados: 0, emContrato: 0 },
+        ocupacaoAgenda: { agendadas: 0, capacidade: 0, percent: 0 },
+        noShow: { canceladas: 0, total: 0, percent: 0 },
+        dealsHistory: [],
       };
     });
 
     const body: ResultadosDecorData = { month: monthKey, channels };
     return NextResponse.json(body);
   } catch (err: unknown) {
-    console.error("[mktp/resultados]", err);
+    console.error("[decor/resultados]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
