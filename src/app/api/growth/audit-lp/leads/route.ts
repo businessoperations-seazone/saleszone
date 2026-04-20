@@ -3,6 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { LpLeadRecord, lpDateKey, readLpLeads, writeLpLeads } from "@/lib/audit-lp"
+import { fetchMiaErrorFromPipedrive } from "@/lib/audit-lp-check"
 
 export const maxDuration = 60
 export const dynamic = "force-dynamic"
@@ -78,9 +79,17 @@ async function recheckOne(lead: LpLeadRecord): Promise<void> {
   if (!deal.mia_link) {
     lead.status = "sem_mia"
     lead.mia_link = undefined
+    const miaErrorStale =
+      !lead.mia_error ||
+      (Date.now() - new Date(lead.mia_error.fetched_at).getTime() > 60 * 60 * 1000)
+    if (miaErrorStale) {
+      const err = await fetchMiaErrorFromPipedrive(deal.deal_id)
+      if (err) lead.mia_error = err
+    }
   } else {
     lead.status = "ok"
     lead.mia_link = deal.mia_link
+    lead.mia_error = undefined
   }
 }
 

@@ -99,12 +99,13 @@ export async function GET() {
 
 // POST — receive Elementor form submission
 export async function POST(req: NextRequest) {
-  // Auth via Bearer token
-  if (LP_WEBHOOK_SECRET) {
-    const auth = req.headers.get("authorization") || ""
-    if (auth !== `Bearer ${LP_WEBHOOK_SECRET}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+  if (!LP_WEBHOOK_SECRET) {
+    console.error("[audit-lp-webhook] LP_WEBHOOK_SECRET não configurado — rejecting request")
+    return NextResponse.json({ error: "Webhook not configured" }, { status: 503 })
+  }
+  const auth = req.headers.get("authorization") || ""
+  if (auth !== `Bearer ${LP_WEBHOOK_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const fields = await parseBody(req)

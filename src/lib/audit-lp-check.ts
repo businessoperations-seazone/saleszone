@@ -118,7 +118,7 @@ function parseMiaErrorNote(content: string): MiaErrorInfo | null {
   }
 }
 
-async function fetchMiaErrorFromPipedrive(dealId: number): Promise<MiaErrorInfo | null> {
+export async function fetchMiaErrorFromPipedrive(dealId: number): Promise<MiaErrorInfo | null> {
   if (!PIPEDRIVE_TOKEN || !dealId) return null
   const url = `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/deals/${dealId}/notes` +
     `?sort=add_time%20DESC&limit=10&api_token=${PIPEDRIVE_TOKEN}`
