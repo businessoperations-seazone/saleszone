@@ -41,3 +41,24 @@ def find_chat_id(phone):
     except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as e:
         print(f"[timelines] find_chat_id({phone}) failed: {e}")
         return None
+
+
+def send_message(chat_id, text):
+    """Envia mensagem pelo Timelines no chat informado.
+
+    Endpoint: POST /chats/{chat_id}/messages
+    Payload: {"text": "..."}
+    Retorna dict do response ou None em erro.
+    """
+    if not TIMELINES_API_TOKEN:
+        print("[timelines] TIMELINES_API_TOKEN vazio — skip send_message")
+        return None
+    try:
+        url = f"{BASE_URL}/chats/{chat_id}/messages"
+        body = json.dumps({"text": text}).encode()
+        req = urllib.request.Request(url, data=body, headers=_headers(), method="POST")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError) as e:
+        print(f"[timelines] send_message(chat_id={chat_id}) failed: {e}")
+        return None
