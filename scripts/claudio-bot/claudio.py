@@ -103,6 +103,83 @@ def fetch_pipeline_deals(pipeline_id):
     return all_deals
 
 
+def fetch_activities_in_range(start_date, end_date, done=0, user_id=0, max_pages=20):
+    """Paginacao /activities com filtro de data.
+
+    Pipedrive trata end_date como EXCLUSIVO — somamos 1 dia pra fazer end_date
+    inclusivo (mais intuitivo pros callers).
+    """
+    pd_end = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    all_activities = []
+    start = 0
+    for _ in range(max_pages):
+        data = pipedrive_get("activities", {
+            "user_id": user_id,
+            "done": done,
+            "start_date": start_date.strftime("%Y-%m-%d"),
+            "end_date": pd_end,
+            "limit": PIPEDRIVE_PAGE_LIMIT,
+            "start": start,
+        })
+        if not data.get("success") or not data.get("data"):
+            break
+        all_activities.extend(data["data"])
+        pagination = data.get("additional_data", {}).get("pagination", {})
+        if not pagination.get("more_items_in_collection"):
+            break
+        start = pagination.get("next_start", start + PIPEDRIVE_PAGE_LIMIT)
+    return all_activities
+
+
+def fetch_deal(deal_id):
+    data = pipedrive_get(f"deals/{deal_id}")
+    if data and data.get("success") and data.get("data"):
+        return data["data"]
+    return None
+
+
+def fetch_deals_batch(deal_ids):
+    """Fetch sequencial de deals por ID. Lento (~0.5s/deal) mas simples."""
+    deals = []
+    for i, did in enumerate(deal_ids):
+        d = fetch_deal(did)
+        if d:
+            deals.append(d)
+        if (i + 1) % 50 == 0:
+            log.info("fetch_deals_batch: %d/%d", i + 1, len(deal_ids))
+    return deals
+
+
+MONITORED_PIPELINE_IDS = {p["id"] for p in PIPELINES.values()}
+
+
+def fetch_lost_deals_with_overdue_activity(today, days_back=14):
+    """Busca deals status=lost cuja proxima atividade (next_activity_date) esta no passado.
+
+    Estrategia: Pipedrive nao permite filtrar /deals por next_activity_date diretamente.
+    Usamos /activities com done=0 (abertas) na janela [today-days_back, yesterday]
+    para encontrar deal_ids com atividade vencida, depois batch-fetch os deals
+    e filtramos status=lost + pipeline monitorado.
+    """
+    yesterday = (today - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=0)
+    earliest = (today - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
+    log.info("Buscando atividades vencidas entre %s e %s", earliest.date(), yesterday.date())
+
+    activities = fetch_activities_in_range(earliest, yesterday, done=0, user_id=0)
+    log.info("Atividades vencidas abertas: %d", len(activities))
+
+    deal_ids = sorted({a.get("deal_id") for a in activities if a.get("deal_id")})
+    log.info("Deal IDs unicos: %d", len(deal_ids))
+
+    deals = fetch_deals_batch(deal_ids)
+    lost_in_monitored = [
+        d for d in deals
+        if d.get("status") == "lost" and d.get("pipeline_id") in MONITORED_PIPELINE_IDS
+    ]
+    log.info("Lost com atividade vencida em pipelines monitorados: %d", len(lost_in_monitored))
+    return lost_in_monitored
+
+
 # ── Classificacao ────────────────────────────────────────────
 
 def get_owner_name(deal):
@@ -182,6 +259,11 @@ def classify_deals(deals, pipeline_key):
             role = "PV"
             log.info("Owner '%s' nao esta no TEAM_MAP — atribuido role PV (pipeline %s)",
                      owner, pipeline_key)
+
+        # Pre-vendas nao recebe mais alerta de "sem atividade futura".
+        # Why: pre-vendas trabalha com fluxo de resposta, nao follow-up agendado.
+        if category == "sem_atividade" and role == "PV":
+            continue
 
         result[category][role].setdefault(owner, []).append(deal_id)
 
@@ -306,8 +388,12 @@ def slack_post(channel, text, thread_ts=None, dry_run=False):
 
 # ── Orquestracao ─────────────────────────────────────────────
 
-def run_pipeline(pipeline_key, dry_run=False, test_mode=False):
-    """Processa um pipeline completo: fetch → classify → send (2 categorias)."""
+def run_pipeline(pipeline_key, dry_run=False, test_mode=False, extra_deals=None):
+    """Processa um pipeline completo: fetch → classify → send (2 categorias).
+
+    extra_deals: lista opcional de deals ja filtrados (ex: lost com overdue activity)
+    a serem incluidos junto dos abertos antes da classificacao.
+    """
     pipeline = PIPELINES[pipeline_key]
     pipeline_id = pipeline["id"]
     pipeline_name = pipeline["name"]
@@ -316,9 +402,14 @@ def run_pipeline(pipeline_key, dry_run=False, test_mode=False):
 
     log.info("─── %s (pipeline %d) ───", pipeline_name, pipeline_id)
 
-    # Fetch
+    # Fetch abertos
     deals = fetch_pipeline_deals(pipeline_id)
-    log.info("Total deals abertos: %d", len(deals))
+    log.info("Deals abertos: %d", len(deals))
+
+    # Injeta lost com atividade vencida (classify cuida de colocar em "atrasados")
+    if extra_deals:
+        deals.extend(extra_deals)
+        log.info("+ %d lost com atividade vencida (total: %d)", len(extra_deals), len(deals))
 
     # Classify (retorna {"sem_atividade": {...}, "atrasados": {...}})
     classified = classify_deals(deals, pipeline_key)
@@ -409,10 +500,23 @@ def run_check(dry_run=False, test_mode=False):
         log.info("MODO TESTE: mensagens enviadas para #supervisor-claudio")
     log.info("=" * 60)
 
+    # Fetch global: lost deals com atividade vencida (1 chamada, reutilizada por todos pipelines)
+    try:
+        lost_overdue = fetch_lost_deals_with_overdue_activity(datetime.now())
+    except Exception as e:
+        log.error("Erro ao buscar lost com atividade vencida: %s", e)
+        lost_overdue = []
+
+    lost_by_pipeline = {}
+    for d in lost_overdue:
+        pid = d.get("pipeline_id")
+        lost_by_pipeline.setdefault(pid, []).append(d)
+
     all_snapshots = {}
     for key in PIPELINES:
         try:
-            snapshot = run_pipeline(key, dry_run=dry_run, test_mode=test_mode)
+            extra = lost_by_pipeline.get(PIPELINES[key]["id"], [])
+            snapshot = run_pipeline(key, dry_run=dry_run, test_mode=test_mode, extra_deals=extra)
             if snapshot:
                 all_snapshots[key] = snapshot
         except Exception as e:
