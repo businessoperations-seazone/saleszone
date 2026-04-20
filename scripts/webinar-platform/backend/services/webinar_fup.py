@@ -55,3 +55,22 @@ def should_send_fup(previous, updated):
     if not _valid_phone(updated.get("phone")):
         return False
     return True
+
+
+import supabase_client as db
+
+
+def get_closer_slug(session_id):
+    """Busca slug do closer dono da sessão. Retorna None se não resolver."""
+    if not session_id:
+        return None
+    sessions = db.select("webinar_sessions", filters={"id": f"eq.{session_id}"}) or []
+    if not sessions:
+        return None
+    closer_id = sessions[0].get("closer_id")
+    if not closer_id:
+        return None
+    closers = db.select("webinar_closers", filters={"id": f"eq.{closer_id}"}) or []
+    if not closers:
+        return None
+    return closers[0].get("slug")
