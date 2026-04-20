@@ -16,9 +16,9 @@ export const SQUADS = [
     id: 1,
     name: "Squad 1",
     marketing: "Jean",
-    preVenda: "Hellen Dias",
+    preVenda: "Carolina Maeda",
     venda: "Luana Schaikoski",
-    empreendimentos: ["Ponta das Canas Spot II", "Itacaré Spot", "Marista 144 Spot", "Jurerê Spot II", "Jurerê Spot III", "Vistas de Anitá II"],
+    empreendimentos: ["Ponta das Canas Spot II", "Marista 144 Spot", "Jurerê Spot II", "Jurerê Spot III", "Vistas de Anitá II"],
   },
   {
     id: 2,
@@ -26,18 +26,27 @@ export const SQUADS = [
     marketing: "Jean",
     preVenda: "Jeniffer Correa",
     venda: "Filipe Padoveze",
-    empreendimentos: ["Barra Grande Spot", "Natal Spot", "Novo Campeche Spot II", "Caraguá Spot", "Bonito Spot II"],
+    empreendimentos: ["Natal Spot", "Novo Campeche Spot II", "Caraguá Spot"],
+  },
+  {
+    id: 3,
+    name: "Squad 3",
+    marketing: "Jean",
+    preVenda: "Karoane Izabela Soares",
+    venda: "Hellen Dias",
+    empreendimentos: ["Itacaré Spot", "Bonito Spot II", "Barra Grande Spot"],
   },
 ] as const;
 
 // Pre-venda and Venda people for alignment view
-export const PV_COLS = ["Hellen Dias", "Jeniffer Correa"];
-export const V_COLS = ["Luana Schaikoski", "Filipe Padoveze"];
+export const PV_COLS = ["Carolina Maeda", "Jeniffer Correa", "Karoane Izabela Soares"];
+export const V_COLS = ["Luana Schaikoski", "Filipe Padoveze", "Hellen Dias"];
 
 // Squad → índices em V_COLS (quais closers pertencem a cada squad)
 export const SQUAD_V_MAP: Record<number, number[]> = {
   1: [0],    // Luana Schaikoski
   2: [1],    // Filipe Padoveze
+  3: [2],    // Hellen Dias
 };
 
 // UI Tokens
@@ -74,7 +83,7 @@ export const T = {
   font: "'Helvetica Neue', -apple-system, BlinkMacSystemFont, sans-serif",
 } as const;
 
-export const SQUAD_COLORS: Record<number, string> = { 1: T.azul600, 2: T.roxo600 };
+export const SQUAD_COLORS: Record<number, string> = { 1: T.azul600, 2: T.roxo600, 3: T.teal600 };
 
 // MQL Balanceamento — opções possíveis do Baserow (multi-select fields)
 export const MQL_INTENCOES = [

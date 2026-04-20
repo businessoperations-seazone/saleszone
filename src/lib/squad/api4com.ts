@@ -39,15 +39,15 @@ export const PRESELLER_RAMAIS: Record<string, string> = {
   'Larissa Marques': '1171',
   'Raynara Lopes': '1110',
   'Raquel Levi': '1102',
-  'Karoane Soares': '1170',
+  'Karoane Izabela Soares': '1170',
   'Rubia Lorena Santos': '1149',
   'Luciana Patrício': '1151',
-  'Hellen Dias': '1148',
 }
 
 export const CLOSER_RAMAIS: Record<string, string> = {
   'Filipe Padoveze': '1137',
   'Luana Schaikoski': '1080',
+  'Hellen Dias': '1148',
   'Priscila Perrone': '1119',
   'Priscila Pestana Perrone': '1119',
   'Ricardo Perrone': '1146',

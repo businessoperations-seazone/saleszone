@@ -188,68 +188,73 @@ const STAGE_LABELS: Record<string, string> = {
 
 function MultiLineChart({ data }: { data: { date: string; byStage: Record<string, number> }[] }) {
   const [hover, setHover] = useState<number | null>(null);
-  if (data.length === 0) return <div style={{ fontSize: 11, color: T.cinza400, padding: 20, textAlign: "center" }}>Sem dados</div>;
+  if (data.length < 2) return <div style={{ fontSize: 11, color: T.cinza400, padding: 20, textAlign: "center" }}>Dados insuficientes</div>;
   const stages = Object.keys(STAGE_COLORS);
-  const last = data[data.length - 1];
-  const active = hover !== null ? data[hover] : null;
-  const display = active || last;
   const maxVal = Math.max(...data.flatMap((d) => stages.map((s) => d.byStage[s] || 0)), 1);
   const W = 500;
   const H = 70;
+  const todayStr = new Date().toISOString().substring(0, 10);
+  const todayIdx = data.findIndex((d) => d.date === todayStr);
+  const activeIdx = hover ?? (todayIdx >= 0 ? todayIdx : data.length - 1);
+  const activeData = activeIdx >= 0 && activeIdx < data.length ? data[activeIdx] : null;
 
   return (
-    <div style={{ position: "relative" }}>
-      {data.length === 1 ? (
-        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-          {stages.map((stage) => {
-            const val = last.byStage[stage] || 0;
-            const cy = H - (val / maxVal) * (H - 5);
-            return <circle key={stage} cx={W / 2} cy={cy} r={3} fill={STAGE_COLORS[stage]} />;
-          })}
-        </svg>
-      ) : (
-        <svg
-          width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const x = (e.clientX - rect.left) / rect.width;
-            const idx = Math.round(x * (data.length - 1));
-            setHover(Math.max(0, Math.min(data.length - 1, idx)));
-          }}
-          onMouseLeave={() => setHover(null)}
-          style={{ cursor: "crosshair" }}
-        >
-          {stages.map((stage) => {
-            const points = data.map((d, i) => {
-              const x = (i / (data.length - 1)) * W;
-              const y = H - ((d.byStage[stage] || 0) / maxVal) * (H - 5);
-              return `${x},${y}`;
-            });
-            const isDashed = stage === "reserva" || stage === "contrato";
+    <div>
+      {activeData && (
+        <div style={{ fontSize: 9, color: T.cinza600, marginBottom: 4, minHeight: 14, display: "flex", flexWrap: "wrap", gap: "2px 8px" }}>
+          <span style={{ fontWeight: 600 }}>{activeData.date.substring(5).replace("-", "/")}</span>
+          {stages.map((s) => {
+            const val = activeData.byStage[s] || 0;
             return (
-              <path
-                key={stage}
-                d={`M${points.join(" L")}`}
-                fill="none"
-                stroke={STAGE_COLORS[stage]}
-                strokeWidth={1.5}
-                strokeDasharray={isDashed ? "4" : undefined}
-              />
+              <span key={s} style={{ color: STAGE_COLORS[s], fontWeight: 500 }}>
+                {STAGE_LABELS[s]}: {val}
+              </span>
             );
           })}
-          {hover !== null && (
-            <line x1={(hover / (data.length - 1)) * W} y1={0} x2={(hover / (data.length - 1)) * W} y2={H} stroke={T.cinza400} strokeWidth={1} opacity={0.5} strokeDasharray="3" />
-          )}
-        </svg>
+        </div>
       )}
-      <div style={{ display: "flex", gap: 6, fontSize: 9, marginTop: 2, color: T.cinza400, flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 600 }}>{active ? display.date.substring(5).replace("-", "/") : "Hoje"}</span>
-        {stages.map((s) => {
-          const val = display.byStage[s] || 0;
-          if (s === "won" && val === 0) return null;
-          return <span key={s} style={{ color: STAGE_COLORS[s], fontWeight: 600 }}>{STAGE_LABELS[s]}: {val}</span>;
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = ((e.clientX - rect.left) / rect.width) * W;
+          const idx = Math.round((x / W) * (data.length - 1));
+          if (idx >= 0 && idx < data.length) setHover(idx);
+        }}
+        onMouseLeave={() => setHover(null)}
+      >
+        {stages.map((stage) => {
+          const points = data.map((d, i) => {
+            const x = (i / (data.length - 1)) * W;
+            const y = H - ((d.byStage[stage] || 0) / maxVal) * (H - 5);
+            return `${x},${y}`;
+          });
+          const isDashed = stage === "reserva" || stage === "contrato";
+          return (
+            <path
+              key={stage}
+              d={`M${points.join(" L")}`}
+              fill="none"
+              stroke={STAGE_COLORS[stage]}
+              strokeWidth={1.5}
+              strokeDasharray={isDashed ? "4" : undefined}
+            />
+          );
         })}
-      </div>
+        {activeIdx >= 0 && activeIdx < data.length && (() => {
+          const x = (activeIdx / (data.length - 1)) * W;
+          return (
+            <>
+              <line x1={x} y1={0} x2={x} y2={H} stroke={T.cinza300} strokeWidth={1} strokeDasharray="3" />
+              {stages.map((stage) => {
+                const val = activeData!.byStage[stage] || 0;
+                if (val === 0) return null;
+                const y = H - (val / maxVal) * (H - 5);
+                return <circle key={stage} cx={x} cy={y} r={3} fill={STAGE_COLORS[stage]} stroke="#fff" strokeWidth={1} />;
+              })}
+            </>
+          );
+        })()}
+      </svg>
     </div>
   );
 }

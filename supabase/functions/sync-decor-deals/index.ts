@@ -1,4 +1,5 @@
-// MKTP (Marketplace) module — auto-generated from SZI equivalent
+// Decor module — syncs pipeline 44 deals into decor_deals
+// Stages are auto-discovered from Pipedrive on startup (no hardcoded IDs needed).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -10,88 +11,24 @@ const corsHeaders = {
 // ---- Pipedrive constants ----
 const PIPEDRIVE_DOMAIN = "seazone-fd92b9.pipedrive.com";
 const BASE = `https://${PIPEDRIVE_DOMAIN}/api/v1`;
-const PIPELINE_ID = 37;
+const PIPELINE_ID = 44;
 const FIELD_CANAL = "93b3ada8b94bd1fc4898a25754d6bcac2713f835";
 const FIELD_EMPREENDIMENTO = "6d565fd4fce66c16da078f520a685fa2fa038272";
 const FIELD_QUALIFICACAO = "bc74bcc4326527cbeb331d1697d4c8812d68506e";
 const FIELD_REUNIAO = "bfafc352c5c6f2edbaa41bf6d1c6daa825fc9c16";
 const FIELD_RD_SOURCE = "ff53f6910138fa1d8969b686acb4b1336d50c9bd";
 const FIELD_PRESELLER = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
-const CANAL_MARKETING_ID = "12";
 
-const EMPREENDIMENTO_MAP: Record<string, string> = {
-  "3313": "Altavista",
-  "1132": "Barra de São Miguel Spot",
-  "3478": "Barra Grande Spot",
-  "462": "Barra Spot",
-  "2840": "Batel Spot",
-  "3303": "Bonito Spot",
-  "3451": "Bonito Spot II",
-  "3266": "Cachoeira Beach Spot",
-  "2835": "Cachoeira Spot",
-  "2324": "Campeche Spot",
-  "4090": "Canas Beach Spot",
-  "2573": "Canasvieiras Spot",
-  "692": "Canela Spot",
-  "3416": "Caraguá Spot",
-  "510": "Downtown",
-  "1125": "Duetto",
-  "4271": "Farol da Barra Spot",
-  "4056": "Foz Spot",
-  "3201": "Ilha do Campeche II Spot",
-  "2607": "Ilha do Campeche Spot",
-  "828": "Imbassaí Spot",
-  "464": "Ingleses Spot",
-  "3467": "Itacaré Spot",
-  "466": "Japaratinga Spot",
-  "3985": "Jardim dos Namorados",
-  "2904": "Jurerê Beach Spot",
-  "506": "Jurerê Spot",
-  "3333": "Jurerê Spot II",
-  "4586": "Jurerê Spot III",
-  "505": "Lagoa Spot",
-  "2935": "Marista 144 Spot",
-  "1126": "Maxxi Garden",
-  "3158": "Meireles Spot",
-  "2885": "Morro das Pedras Spot",
-  "1127": "Mosaico",
-  "4495": "Natal Spot",
-  "3182": "New Life",
-  "4292": "Novo Campeche Spot",
-  "4655": "Novo Campeche Spot II",
-  "636": "Olímpia Spot",
-  "490": "Penha Spot",
-  "1124": "Pio 4",
-  "3489": "Ponta das Canas Spot",
-  "4109": "Ponta das Canas Spot II",
-  "1128": "Reflect",
-  "2795": "Rosa Norte Spot",
-  "504": "Rosa Spot",
-  "463": "Rosa Sul Spot",
-  "1447": "Salvador Spot",
-  "3298": "Santinho Spot",
-  "3119": "Santo Antônio Spot",
-  "3308": "Soul Guarajuba",
-  "2868": "Sul da Ilha Spot",
-  "1129": "T58",
-  "824": "Top Club",
-  "1171": "Trancoso Spot",
-  "465": "Urubici Spot",
-  "2526": "Urubici Spot II",
-  "2415": "Vale do Ouro",
-  "461": "Vistas de Anitá I",
-  "637": "Vistas de Anitá II",
-  "2745": "VN Ueno",
-  "3309": "Zn Barra",
-};
+const OPP_MIN_ORDER = 9; // stage_order >= 9 = OPP (Reunião/OPP)
 
-const PIPELINE_STAGES: number[] = [336, 335, 334, 347, 333, 284, 337, 274, 308, 309, 393, 305, 271];
-
-const STAGE_ORDER: Record<number, number> = {
-  336: 1, 335: 2, 334: 3, 347: 4, 333: 5, 284: 6, 337: 7, 274: 8, 308: 9, 309: 10, 393: 11, 305: 12, 271: 13,
-};
-
-const OPP_MIN_ORDER = 9;
+// Stages discovered from Pipedrive on first use; auto-populated by ensureStages()
+// Stage names for pipeline 44 (Decor):
+// 1=FUP Parceiro, 2=Lead in, 3=Contatados, 4=Qualificação, 5=Qualificado,
+// 6=Aguardando data, 7=Agendado, 8=No Show/Reagendamento, 9=Reunião/OPP,
+// 10=FUP, 11=Negociação, 12=Fila de espera, 13=Reservas, 14=Contrato
+let PIPELINE_STAGES: number[] = [];
+let STAGE_ORDER: Record<number, number> = {};
+let MAX_STAGE_ORDER = 14;
 
 // ---- Pipedrive API ----
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -114,12 +51,20 @@ async function pipedriveGet(apiToken: string, path: string, params: Record<strin
   throw new Error(`Pipedrive ${path}: max retries exceeded`);
 }
 
-// ---- Deal helpers ----
-function getEmpreendimento(deal: any): string | null {
-  const enumId = String(deal[FIELD_EMPREENDIMENTO] || "");
-  return EMPREENDIMENTO_MAP[enumId] || null;
+// Fetch and cache pipeline 44 stages from Pipedrive
+async function ensureStages(apiToken: string) {
+  if (PIPELINE_STAGES.length > 0) return;
+  const res = await pipedriveGet(apiToken, "/stages", { pipeline_id: String(PIPELINE_ID) });
+  const stages = ((res.data || []) as any[]).sort((a, b) => a.order_nr - b.order_nr);
+  PIPELINE_STAGES = stages.map((s) => Number(s.id));
+  for (let i = 0; i < stages.length; i++) {
+    STAGE_ORDER[stages[i].id] = i + 1;
+  }
+  MAX_STAGE_ORDER = stages.length;
+  console.log(`Stages loaded for pipeline ${PIPELINE_ID}: ${JSON.stringify(STAGE_ORDER)}`);
 }
 
+// ---- Deal helpers ----
 function dealToRow(deal: any, maxStageOrder: number | null, flowFetched: boolean) {
   const stageOrder = STAGE_ORDER[deal.stage_id] || 0;
   return {
@@ -135,7 +80,7 @@ function dealToRow(deal: any, maxStageOrder: number | null, flowFetched: boolean
     update_time: deal.update_time || null,
     canal: String(deal[FIELD_CANAL] || ""),
     empreendimento_id: String(deal[FIELD_EMPREENDIMENTO] || ""),
-    empreendimento: getEmpreendimento(deal),
+    empreendimento: null, // Decor doesn't filter by empreendimento
     qualificacao_date: deal[FIELD_QUALIFICACAO] || null,
     reuniao_date: deal[FIELD_REUNIAO] || null,
     lost_reason: deal.lost_reason || null,
@@ -150,28 +95,27 @@ function dealToRow(deal: any, maxStageOrder: number | null, flowFetched: boolean
   };
 }
 
-// ---- Batch upsert helper ----
+// ---- Batch upsert ----
 async function upsertBatch(supabase: any, rows: any[]) {
   for (let i = 0; i < rows.length; i += 500) {
     const batch = rows.slice(i, i + 500);
-    const { error } = await supabase.from("mktp_deals").upsert(batch, { onConflict: "deal_id" });
+    const { error } = await supabase.from("decor_deals").upsert(batch, { onConflict: "deal_id" });
     if (error) console.error(`Upsert error:`, error.message);
   }
 }
 
-// ---- Batch update helper (partial update, doesn't reset other columns) ----
 async function updateFlowBatch(supabase: any, rows: Array<{ deal_id: number; max_stage_order: number }>) {
   const now = new Date().toISOString();
   for (const row of rows) {
     const { error } = await supabase
-      .from("mktp_deals")
+      .from("decor_deals")
       .update({ max_stage_order: row.max_stage_order, flow_fetched: true, synced_at: now })
       .eq("deal_id", row.deal_id);
     if (error) console.error(`Update error deal ${row.deal_id}:`, error.message);
   }
 }
 
-// ---- Flow API: find max stage a deal ever reached ----
+// ---- Flow API: find max stage reached ----
 async function getMaxStageReached(apiToken: string, dealId: number, currentOrder: number): Promise<number> {
   if (currentOrder >= OPP_MIN_ORDER) return currentOrder;
   let max = currentOrder;
@@ -198,17 +142,17 @@ async function getMaxStageReached(apiToken: string, dealId: number, currentOrder
   return max;
 }
 
-// ---- Stale cleanup: fetch all open deal IDs from DB, exclude current Pipedrive IDs ----
+// ---- Stale cleanup ----
 async function fetchStaleIds(supabase: any, currentPdIds: Set<number>): Promise<number[]> {
   const staleIds: number[] = [];
   let offset = 0;
   while (true) {
     const { data, error } = await supabase
-      .from("mktp_deals")
+      .from("decor_deals")
       .select("deal_id")
       .eq("status", "open")
       .range(offset, offset + 999);
-    if (error) { console.error("  Stale cleanup query error:", error.message); break; }
+    if (error) { console.error("Stale cleanup query error:", error.message); break; }
     if (!data || data.length === 0) break;
     for (const d of data) {
       if (!currentPdIds.has(d.deal_id)) staleIds.push(d.deal_id);
@@ -221,10 +165,10 @@ async function fetchStaleIds(supabase: any, currentPdIds: Set<number>): Promise<
 
 // ---- Mode: deals-open ----
 async function syncDealsOpen(apiToken: string, supabase: any) {
-  console.log(`syncDealsOpen: fetching pipeline ${PIPELINE_ID} open deals...`);
+  await ensureStages(apiToken);
+  console.log(`syncDealsOpen: pipeline ${PIPELINE_ID}...`);
 
-  // /pipelines/{id}/deals returns user_id as integer (not object with name),
-  // so fetch ALL users (paginated) to build complete userMap for owner name resolution
+  // /pipelines/{id}/deals returns user_id as integer — fetch all users for name resolution
   const userMap = new Map<number, string>();
   let uStart = 0;
   while (true) {
@@ -241,15 +185,13 @@ async function syncDealsOpen(apiToken: string, supabase: any) {
 
   while (true) {
     const res = await pipedriveGet(apiToken, `/pipelines/${PIPELINE_ID}/deals`, {
-      limit: "500", start: String(start),
+      limit: "500", start: String(start), everyone: "1",
     });
     if (!res.data || res.data.length === 0) break;
     total += res.data.length;
 
     for (const deal of res.data) {
-      // Pipeline endpoint only returns MKTP pipeline, but filter just in case
       if (deal.pipeline_id !== PIPELINE_ID) continue;
-      // Resolve owner_name: always prefer userMap (handles both integer and object user_id)
       const userId = typeof deal.user_id === "object" ? deal.user_id?.id : deal.user_id;
       const resolvedName = userId
         ? (userMap.get(Number(userId)) ?? (typeof deal.user_id === "object" ? deal.user_id?.name : null))
@@ -263,31 +205,27 @@ async function syncDealsOpen(apiToken: string, supabase: any) {
     start += 500;
   }
 
-  console.log(`  Open deals fetched: ${total}, rows to upsert: ${rows.length}`);
+  console.log(`  Open deals fetched: ${total}, rows: ${rows.length}`);
   await upsertBatch(supabase, rows);
 
-  // Stale cleanup: mark as "lost" any deals that are "open" in DB but no longer
-  // in the Pipedrive open deals list (i.e., they were closed since last sync).
-  // This prevents the DB from accumulating closed deals marked as "open".
+  // Stale cleanup
   const currentPdIds = new Set(rows.map((r: any) => r.deal_id));
-  const staleIds = currentPdIds.size > 0
-    ? await fetchStaleIds(supabase, currentPdIds)
-    : [];
-
+  const staleIds = currentPdIds.size > 0 ? await fetchStaleIds(supabase, currentPdIds) : [];
   if (staleIds.length > 0) {
     await supabase
-      .from("mktp_deals")
+      .from("decor_deals")
       .update({ status: "lost", synced_at: new Date().toISOString() })
       .in("deal_id", staleIds);
-    console.log(`  Stale cleanup: marked ${staleIds.length} deals as lost`);
+    console.log(`  Stale cleanup: ${staleIds.length} deals marked lost`);
   }
 
-  return { totalFetched: total, upserted: rows.length };
+  return { totalFetched: total, upserted: rows.length, staleMarked: staleIds.length };
 }
 
 // ---- Mode: deals-won ----
 async function syncDealsWon(apiToken: string, supabase: any) {
-  console.log(`syncDealsWon: fetching won deals via stage_id loop...`);
+  await ensureStages(apiToken);
+  console.log(`syncDealsWon: pipeline ${PIPELINE_ID}...`);
   const seenDealIds = new Set<number>();
   const rows: any[] = [];
   let totalFetched = 0;
@@ -296,48 +234,41 @@ async function syncDealsWon(apiToken: string, supabase: any) {
     let start = 0;
     while (true) {
       const res = await pipedriveGet(apiToken, "/deals", {
-        status: "won",
-        stage_id: String(stageId),
-        limit: "500",
-        start: String(start),
+        status: "won", stage_id: String(stageId), limit: "500", start: String(start),
       });
       if (!res.data || res.data.length === 0) break;
       totalFetched += res.data.length;
-
       for (const deal of res.data) {
         if (deal.pipeline_id !== PIPELINE_ID) continue;
         if (seenDealIds.has(deal.id)) continue;
         seenDealIds.add(deal.id);
-        // Won deals passed all stages: max_stage_order = 13 (MKTP has 13 stages)
-        rows.push(dealToRow(deal, 13, true));
+        rows.push(dealToRow(deal, MAX_STAGE_ORDER, true));
       }
-
       if (!res.additional_data?.pagination?.more_items_in_collection) break;
       start += 500;
     }
   }
 
-  console.log(`  Won deals fetched: ${totalFetched}, unique: ${seenDealIds.size}, rows: ${rows.length}`);
+  console.log(`  Won fetched: ${totalFetched}, unique: ${seenDealIds.size}, rows: ${rows.length}`);
   await upsertBatch(supabase, rows);
   return { totalFetched, unique: seenDealIds.size, upserted: rows.length };
 }
 
 // ---- Mode: deals-lost ----
-// Each stage is paginated independently. State is tracked per-stage via `stage_offsets`.
-// Body params: cutoff_days (0=no cutoff), stage_offsets (Record<stageId, offset>, default all 0)
 async function syncDealsLost(
   apiToken: string,
   supabase: any,
   cutoffDays: number,
   stageOffsets: Record<string, number>,
 ) {
+  await ensureStages(apiToken);
   let cutoffStr = "";
   if (cutoffDays > 0) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - cutoffDays);
     cutoffStr = cutoff.toISOString().substring(0, 10);
   }
-  console.log(`syncDealsLost: cutoff=${cutoffStr || "NONE"}, stageOffsets=${JSON.stringify(stageOffsets)}`);
+  console.log(`syncDealsLost: cutoff=${cutoffStr || "NONE"}`);
 
   const seenDealIds = new Set<number>();
   const rows: any[] = [];
@@ -348,22 +279,14 @@ async function syncDealsLost(
 
   for (const stageId of PIPELINE_STAGES) {
     const key = String(stageId);
-    // -1 means this stage was already fully synced in a prior invocation
-    if (nextOffsets[key] === -1) {
-      completedStages.push(stageId);
-      continue;
-    }
+    if (nextOffsets[key] === -1) { completedStages.push(stageId); continue; }
 
     let start = nextOffsets[key] || 0;
     let stageDone = false;
 
     while (true) {
       const res = await pipedriveGet(apiToken, "/deals", {
-        status: "lost",
-        stage_id: key,
-        sort: "add_time DESC",
-        limit: "500",
-        start: String(start),
+        status: "lost", stage_id: key, sort: "add_time DESC", limit: "500", start: String(start),
       });
       if (!res.data || res.data.length === 0) { stageDone = true; break; }
 
@@ -371,37 +294,31 @@ async function syncDealsLost(
         if (deal.pipeline_id !== PIPELINE_ID) continue;
         if (seenDealIds.has(deal.id)) continue;
         seenDealIds.add(deal.id);
-
-        const stageOrder = STAGE_ORDER[deal.stage_id] || 0;
-        rows.push(dealToRow(deal, stageOrder, false));
+        rows.push(dealToRow(deal, STAGE_ORDER[deal.stage_id] || 0, false));
       }
 
       totalFetched += res.data.length;
 
-      // Check cutoff
       if (cutoffStr) {
-        const oldestAddTime = res.data[res.data.length - 1]?.add_time?.substring(0, 10) || "";
-        if (oldestAddTime && oldestAddTime < cutoffStr) { stageDone = true; break; }
+        const oldest = res.data[res.data.length - 1]?.add_time?.substring(0, 10) || "";
+        if (oldest && oldest < cutoffStr) { stageDone = true; break; }
       }
 
       if (!res.additional_data?.pagination?.more_items_in_collection) { stageDone = true; break; }
       start += 500;
-
-      // Cap total rows at 5000 per invocation to stay within memory/time limits
       if (rows.length >= 5000) { hitCap = true; break; }
     }
 
     if (stageDone) {
-      nextOffsets[key] = -1; // mark stage as complete
+      nextOffsets[key] = -1;
       completedStages.push(stageId);
     } else {
-      nextOffsets[key] = start; // save where we left off
+      nextOffsets[key] = start;
     }
-
     if (hitCap) break;
   }
 
-  console.log(`  Lost deals fetched: ${totalFetched}, unique: ${seenDealIds.size}, rows: ${rows.length}, completedStages: ${completedStages.length}/${PIPELINE_STAGES.length}`);
+  console.log(`  Lost: scanned ${seenDealIds.size}, rows ${rows.length}, stages ${completedStages.length}/${PIPELINE_STAGES.length}`);
   await upsertBatch(supabase, rows);
 
   const allDone = completedStages.length === PIPELINE_STAGES.length;
@@ -417,90 +334,53 @@ async function syncDealsLost(
 
 // ---- Mode: deals-flow ----
 async function syncDealsFlow(apiToken: string, supabase: any) {
-  console.log(`syncDealsFlow: fetching deals needing flow analysis...`);
+  await ensureStages(apiToken);
+  console.log(`syncDealsFlow: pipeline ${PIPELINE_ID}...`);
 
-  // Query deals that need flow: flow_fetched=false, status=lost, marketing, with empreendimento
   const { data: deals, error: queryErr } = await supabase
-    .from("mktp_deals")
-    .select("deal_id, stage_order, canal, empreendimento")
+    .from("decor_deals")
+    .select("deal_id, stage_order")
     .eq("flow_fetched", false)
     .eq("status", "lost")
-    .eq("canal", CANAL_MARKETING_ID)
-    .not("empreendimento", "is", null)
     .limit(500);
 
-  if (queryErr) {
-    console.error("Query error:", queryErr.message);
-    return { processed: 0, remaining: 0, done: true, error: queryErr.message };
-  }
-
-  if (!deals || deals.length === 0) {
-    console.log("  No deals need flow analysis");
-    return { processed: 0, remaining: 0, done: true };
-  }
+  if (queryErr) return { processed: 0, remaining: 0, done: true, error: queryErr.message };
+  if (!deals || deals.length === 0) return { processed: 0, remaining: 0, done: true };
 
   console.log(`  Found ${deals.length} deals needing flow analysis`);
+  const skipFlow = deals.filter((d: any) => d.stage_order >= OPP_MIN_ORDER);
+  const needFlow = deals.filter((d: any) => d.stage_order < OPP_MIN_ORDER);
 
-  // Separate deals that already have stage_order >= OPP_MIN_ORDER (skip flow)
-  const skipFlow: any[] = [];
-  const needFlow: any[] = [];
-
-  for (const deal of deals) {
-    if (deal.stage_order >= OPP_MIN_ORDER) {
-      skipFlow.push(deal);
-    } else {
-      needFlow.push(deal);
-    }
-  }
-
-  // Batch update deals that can skip flow (use UPDATE, not upsert, to preserve other columns)
   if (skipFlow.length > 0) {
-    await updateFlowBatch(supabase, skipFlow.map((d: any) => ({
-      deal_id: d.deal_id,
-      max_stage_order: d.stage_order,
-    })));
-    console.log(`  Skipped flow for ${skipFlow.length} deals (already OPP+)`);
+    await updateFlowBatch(supabase, skipFlow.map((d: any) => ({ deal_id: d.deal_id, max_stage_order: d.stage_order })));
   }
 
-  // Process deals that need flow API with concurrency=20
-  let processed = 0;
   const CONCURRENCY = 20;
-
+  let processed = 0;
   for (let i = 0; i < needFlow.length; i += CONCURRENCY) {
     const chunk = needFlow.slice(i, i + CONCURRENCY);
     const results = await Promise.all(
-      chunk.map(async (deal: any) => {
-        const maxOrder = await getMaxStageReached(apiToken, deal.deal_id, deal.stage_order);
-        return { deal_id: deal.deal_id, max_stage_order: maxOrder };
-      })
+      chunk.map(async (deal: any) => ({
+        deal_id: deal.deal_id,
+        max_stage_order: await getMaxStageReached(apiToken, deal.deal_id, deal.stage_order),
+      }))
     );
     await updateFlowBatch(supabase, results);
     processed += results.length;
   }
 
-  console.log(`  Flow processed: ${processed}, skipped: ${skipFlow.length}`);
-
-  // Check if there are more deals remaining
   const { count: remaining } = await supabase
-    .from("mktp_deals")
+    .from("decor_deals")
     .select("deal_id", { count: "exact", head: true })
     .eq("flow_fetched", false)
-    .eq("status", "lost")
-    .eq("canal", CANAL_MARKETING_ID)
-    .not("empreendimento", "is", null);
+    .eq("status", "lost");
 
-  return {
-    processed: processed + skipFlow.length,
-    remaining: remaining || 0,
-    done: (remaining || 0) === 0,
-  };
+  return { processed: processed + skipFlow.length, remaining: remaining || 0, done: (remaining || 0) === 0 };
 }
 
 // ---- Deno.serve handler ----
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   const t0 = Date.now();
 
@@ -510,17 +390,15 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
-    // Get Pipedrive token from vault
     const { data: tokenData, error: tokenErr } = await supabase.rpc("vault_read_secret", {
       secret_name: "PIPEDRIVE_API_TOKEN",
     });
     if (tokenErr || !tokenData) throw new Error(`Vault error: ${tokenErr?.message}`);
     const apiToken = tokenData;
 
-    // Parse mode from request body
     const body = await req.json().catch(() => ({}));
     const mode = body.mode || "deals-open";
-    console.log(`sync-mktp-deals: mode=${mode}`);
+    console.log(`sync-decor-deals: mode=${mode}`);
 
     let result: any;
 
@@ -532,43 +410,20 @@ Deno.serve(async (req) => {
         result = await syncDealsWon(apiToken, supabase);
         break;
       case "deals-lost": {
-        const cutoffDays = body.cutoff_days ?? 365; // 0 = no cutoff (full backfill)
-        const stageOffsets: Record<string, number> = body.stage_offsets || {};
-        result = await syncDealsLost(apiToken, supabase, cutoffDays, stageOffsets);
+        const cutoffDays = body.cutoff_days ?? 365;
+        result = await syncDealsLost(apiToken, supabase, cutoffDays, body.stage_offsets || {});
         break;
       }
       case "deals-flow":
         result = await syncDealsFlow(apiToken, supabase);
         break;
-      case "inspect-fields": {
-        // Temporary: list deal fields matching a search term
-        const search = (body.search || "source").toLowerCase();
-        const fieldsRes = await pipedriveGet(apiToken, "/dealFields", { limit: "500", start: "0" });
-        const fields = (fieldsRes.data || [])
-          .filter((f: any) => (f.name || "").toLowerCase().includes(search))
-          .map((f: any) => ({ key: f.key, name: f.name, field_type: f.field_type, options: f.options?.slice(0, 10) }));
-        result = { fields };
-        break;
-      }
       case "inspect-stages": {
-        // Temporary: list stages for this pipeline + full empreendimento options + canal options
-        const inspectPipelineId = body.pipeline_id || PIPELINE_ID;
-        const stagesRes = await pipedriveGet(apiToken, "/stages", { pipeline_id: String(inspectPipelineId) });
-        const stages = (stagesRes.data || []).map((s: any) => ({
-          id: s.id, name: s.name, order_nr: s.order_nr, pipeline_id: s.pipeline_id,
-          deals_count: s.deals_count,
-        }));
-        // Also fetch empreendimento and canal field options (full list)
-        const fieldsRes2 = await pipedriveGet(apiToken, "/dealFields", { limit: "500", start: "0" });
-        const allFields = fieldsRes2.data || [];
-        const empField = allFields.find((f: any) => f.key === "6d565fd4fce66c16da078f520a685fa2fa038272");
-        const canalField = allFields.find((f: any) => f.key === "93b3ada8b94bd1fc4898a25754d6bcac2713f835");
-        result = {
-          pipeline_id: inspectPipelineId,
-          stages,
-          empreendimento_options: (empField?.options || []).map((o: any) => ({ id: o.id, label: o.label })),
-          canal_options: (canalField?.options || []).map((o: any) => ({ id: o.id, label: o.label })),
-        };
+        await ensureStages(apiToken);
+        const stagesRes = await pipedriveGet(apiToken, "/stages", { pipeline_id: String(PIPELINE_ID) });
+        const stages = ((stagesRes.data || []) as any[])
+          .sort((a, b) => a.order_nr - b.order_nr)
+          .map((s) => ({ id: s.id, name: s.name, order_nr: s.order_nr, deals_count: s.deals_count }));
+        result = { pipeline_id: PIPELINE_ID, stages, stage_order: STAGE_ORDER };
         break;
       }
       default:
@@ -579,14 +434,13 @@ Deno.serve(async (req) => {
     }
 
     const elapsed = Date.now() - t0;
-    console.log(`sync-mktp-deals: mode=${mode} done in ${elapsed}ms`);
-
+    console.log(`sync-decor-deals: mode=${mode} done in ${elapsed}ms`);
     return new Response(
       JSON.stringify({ success: true, mode, result, elapsed_ms: elapsed }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err: any) {
-    console.error("sync-mktp-deals error:", err);
+    console.error("sync-decor-deals error:", err);
     return new Response(
       JSON.stringify({ error: err.message, elapsed_ms: Date.now() - t0 }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },

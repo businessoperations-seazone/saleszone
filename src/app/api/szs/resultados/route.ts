@@ -5,19 +5,6 @@ import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
 import { getModuleConfig } from "@/lib/modules";
 import { queryNekt } from "@/lib/nekt";
 
-/* ── Macro-channel mapping ────────────────────────────────── */
-const MACRO_CHANNELS: Record<string, string> = {
-  Marketing: "Vendas Diretas",
-  "Mônica": "Vendas Diretas",
-  Spots: "Expansão",      // Spots vai para Expansão (não Vendas Diretas)
-  Outros: "Vendas Diretas",
-  Parceiros: "Parceiros",
-  "Ind. Corretor": "Parceiros",
-  "Ind. Franquia": "Parceiros",
-  "Ind. Outros Parceiros": "Parceiros",
-  "Expansão": "Expansão",
-};
-
 /* ── Canal group → macro channels (for counts aggregation) ── */
 const CANAL_PARCEIROS = new Set(["Parceiros", "Ind. Corretor", "Ind. Franquia", "Ind. Outros Parceiros"]);
 const CANAL_SPOTS = new Set(["Spots"]);
@@ -122,8 +109,21 @@ function buildEmailChannelMap(rules: { email: string }[]): Record<string, string
 const MEETINGS_PER_DAY = 16;
 const WORK_DAYS_PER_WEEK = 5;
 
-const STAGE_AG_DADOS = 11;   // stage_id 152 → stage_order 11
-const STAGE_CONTRATO = 12;   // stage_id 76  → stage_order 12
+function getNektCidadeSQL(cityFilter: string | null): string {
+  if (!cityFilter) return "";
+  if (cityFilter === "São Paulo")
+    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%são paulo%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%sao paulo%')";
+  if (cityFilter === "Salvador")
+    return "AND LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%salvador%'";
+  if (cityFilter === "Florianópolis")
+    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianopolis%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianópolis%')";
+  // "Outros": não é SP, Salvador nem Floripa
+  return `AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%são paulo%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%sao paulo%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%salvador%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianopolis%'
+          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianópolis%'`;
+}
 
 interface MetricPair { real: number; meta: number }
 
@@ -190,11 +190,6 @@ export async function GET(request: NextRequest) {
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
     const prevStart = `${prevKey}-01`;
-    const prevEnd = `${prevKey}-${new Date(prevDate.getFullYear(), prevDate.getMonth() + 1, 0).getDate()}`;
-
-    const cutoff90 = new Date(now);
-    cutoff90.setDate(cutoff90.getDate() - 90);
-    const cutoffDate = cutoff90.toISOString().substring(0, 10);
 
     // MQL/SQL/OPP/WON/Reserva/Contrato de szs_daily_counts (fonte única, todos os canais)
     // szs_deals é incompleto (exclui Parceiros e Expansão), então sempre usa daily_counts
@@ -297,6 +292,7 @@ export async function GET(request: NextRequest) {
           SELECT etapa, canal, deal_owner_name
           FROM nekt_silver.pipedrive_deals_readable
           WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) IN (152, 76)
+          ${getNektCidadeSQL(cityFilter)}
         `);
 
 
@@ -362,21 +358,24 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Total open: pipedrive_daily_snapshot (mais confiável) > szs_open_snapshots > delta approach
-    if (pdSnap) {
-      snapshots.Geral.totalOpen = pdSnap.total_open || 0;
-      console.log(`[szs-resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
-    } else {
-      const snapRows = await paginate((o, ps) =>
-        admin.from("szs_open_snapshots").select("*").eq("date", todayStr).range(o, o + ps - 1)
-      );
-      if (snapRows.length > 0) {
-        for (const s of snapRows) {
-          snapshots.Geral.totalOpen += s.total_open || 0;
-        }
-        console.log(`[szs-resultados] Using szs_open_snapshots (today): totalOpen=${snapshots.Geral.totalOpen}`);
+    // Total open: pipedrive_daily_snapshot é pipeline-level (sem filtro de cidade).
+    // Com cityFilter, ignora pdSnap — Nekt filtra por cidade_do_imovel mais abaixo.
+    if (!cityFilter) {
+      if (pdSnap) {
+        snapshots.Geral.totalOpen = pdSnap.total_open || 0;
+        console.log(`[szs-resultados] Using pipedrive_daily_snapshot from ${pdSnap.date}: totalOpen=${pdSnap.total_open}`);
       } else {
-        console.warn("[szs-resultados] No pipedrive_daily_snapshot or szs_open_snapshots — chart will show delta-computed total (may be inaccurate)");
+        const snapRows = await paginate((o, ps) =>
+          admin.from("szs_open_snapshots").select("*").eq("date", todayStr).range(o, o + ps - 1)
+        );
+        if (snapRows.length > 0) {
+          for (const s of snapRows) {
+            snapshots.Geral.totalOpen += s.total_open || 0;
+          }
+          console.log(`[szs-resultados] Using szs_open_snapshots (today): totalOpen=${snapshots.Geral.totalOpen}`);
+        } else {
+          console.warn("[szs-resultados] No pipedrive_daily_snapshot or szs_open_snapshots — chart will show delta-computed total (may be inaccurate)");
+        }
       }
     }
 
@@ -404,71 +403,180 @@ export async function GET(request: NextRequest) {
     for (let i = 0; i < allHistDates.length; i++) dateIndexMap.set(allHistDates[i], i);
     const histN = allHistDates.length;
 
-    // Stage thresholds for SZS
-    const HIST_STAGES_SZS = ["mql", "sql", "opp"] as const;
-    const HIST_STAGE_MIN_SZS: Record<string, number> = { mql: 1, sql: 4, opp: 9 };
+    // Stage thresholds for SZS — stageByDay (stock): open deals per stage bucket per day
+    const TH_SQL_SZS = 4;        // cumulative: stage_order >= 4 → SQL+
+    const TH_OPP_SZS = 8;        // cumulative: stage_order >= 8 → OPP+
+    const AGDADOS_ORDER_SZS = 11; // exclusive: stage_order = 11 → Ag.Dados (key: reserva)
+    const CONTRATO_ORDER_SZS = 12; // exclusive: stage_order = 12 → Contrato
 
-    // delta[channel][stage][dateIdx]
-    const histDelta: Record<string, Record<string, number[]>> = {};
+    const SZS_HIST_STAGES = ["mql", "sql", "opp", "reserva", "contrato", "won"] as const;
+
+    // szsStageByDay[channel][stage][dayIdx] — stock counts, not cumulative delta
+    const szsStageByDay: Record<string, Record<string, number[]>> = {};
     for (const ch of CHANNEL_ORDER) {
-      histDelta[ch] = {};
-      for (const s of HIST_STAGES_SZS) histDelta[ch][s] = new Array(histN + 1).fill(0);
-      histDelta[ch]["total"] = new Array(histN + 1).fill(0);
+      szsStageByDay[ch] = { total: new Array(histN).fill(0) };
+      for (const s of SZS_HIST_STAGES) szsStageByDay[ch][s] = new Array(histN).fill(0);
     }
 
     for (const d of histDeals) {
       if (d.lost_reason && String(d.lost_reason).toLowerCase() === "duplicado/erro") continue;
       if (cityFilter && getCidadeGroup(d.empreendimento || "") !== cityFilter) continue;
       const canalGroup = getCanalGroup(String(d.canal || ""));
-      const mso = d.max_stage_order || d.stage_order || 0;
+      const so = d.stage_order || 0;
       const addDay = d.add_time?.substring(0, 10) || "";
-      const closeDay = d.status === "won" ? d.won_time?.substring(0, 10) : d.status === "lost" ? d.lost_time?.substring(0, 10) : null;
-
-      let addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
+      const addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
       if (addIdx < 0) continue;
-
-      let closeIdx: number | null = null;
-      if (closeDay) {
-        const ci = dateIndexMap.get(closeDay);
-        if (ci !== undefined) closeIdx = ci;
-        else if (closeDay < allHistDates[0]) continue;
-      }
-
       const targets = getChannelTabs(canalGroup);
-      for (const ch of targets) {
-        if (!histDelta[ch]) continue;
-        histDelta[ch]["total"][addIdx]++;
-        if (closeIdx !== null) histDelta[ch]["total"][closeIdx]--;
-        for (const s of HIST_STAGES_SZS) {
-          if (mso >= HIST_STAGE_MIN_SZS[s]) {
-            histDelta[ch][s][addIdx]++;
-            if (closeIdx !== null) histDelta[ch][s][closeIdx]--;
+
+      if (d.status === "open") {
+        // Stock: count in current stage bucket for every day from addIdx to today
+        for (let i = addIdx; i < histN; i++) {
+          for (const ch of targets) {
+            if (!szsStageByDay[ch]) continue;
+            szsStageByDay[ch]["total"][i]++;
+            if (so >= 1 && so < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
+            if (so >= TH_SQL_SZS) szsStageByDay[ch]["sql"][i]++;
+            if (so >= TH_OPP_SZS) szsStageByDay[ch]["opp"][i]++;
+            if (so === AGDADOS_ORDER_SZS) szsStageByDay[ch]["reserva"][i]++;
+            if (so === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
+          }
+        }
+      } else {
+        // Won/lost: count in stage buckets during their active period (addIdx → closeIdx)
+        // so historical days show deals that were open then (not just currently-open deals)
+        const closeDay = d.status === "won" ? d.won_time?.substring(0, 10) : d.lost_time?.substring(0, 10);
+        const closeIdx = closeDay ? (dateIndexMap.get(closeDay) ?? histN - 1) : histN - 1;
+        const mso = d.max_stage_order || d.stage_order || 0;
+        for (let i = addIdx; i <= closeIdx && i < histN; i++) {
+          for (const ch of targets) {
+            if (!szsStageByDay[ch]) continue;
+            szsStageByDay[ch]["total"][i]++;
+            if (mso >= 1 && mso < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
+            if (mso >= TH_SQL_SZS) szsStageByDay[ch]["sql"][i]++;
+            if (mso >= TH_OPP_SZS) szsStageByDay[ch]["opp"][i]++;
+            if (mso === AGDADOS_ORDER_SZS) szsStageByDay[ch]["reserva"][i]++;
+            if (mso === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
+          }
+        }
+        // Won count on won_time day
+        if (d.status === "won" && closeDay) {
+          const wonIdx = dateIndexMap.get(closeDay);
+          if (wonIdx !== undefined) {
+            for (const ch of targets) {
+              if (!szsStageByDay[ch]) continue;
+              szsStageByDay[ch]["won"][wonIdx]++;
+            }
           }
         }
       }
     }
 
-    // Build cumulative per channel
+    // Build snapHistMap from szsStageByDay
     const snapHistMap: Record<string, { date: string; total: number; openTotal: number; byStage: Record<string, number> }[]> = {};
     for (const ch of CHANNEL_ORDER) {
       const arr: { date: string; total: number; openTotal: number; byStage: Record<string, number> }[] = [];
-      const cum: Record<string, number> = { total: 0 };
-      for (const s of HIST_STAGES_SZS) cum[s] = 0;
       for (let i = 0; i < histN; i++) {
-        cum["total"] += histDelta[ch]["total"][i];
+        const total = szsStageByDay[ch]["total"][i];
         const byStage: Record<string, number> = {};
-        for (const s of HIST_STAGES_SZS) {
-          cum[s] += histDelta[ch][s][i];
-          byStage[s] = cum[s];
-        }
-        arr.push({ date: allHistDates[i], total: cum["total"], openTotal: cum["total"], byStage });
+        for (const s of SZS_HIST_STAGES) byStage[s] = szsStageByDay[ch][s][i];
+        arr.push({ date: allHistDates[i], total, openTotal: total, byStage });
       }
       snapHistMap[ch] = arr;
     }
 
-    // DON'T override with snapshot — use the live szs_deals computed total (snapHistMap).
-    // The snapshot total_open from pipedrive_daily_snapshot may be stale,
-    // causing the chart to show wrong numbers. The delta-based history is authoritative.
+    // Override último ponto do Geral com contagem real-time do Nekt (filtra por cidade quando ativo)
+    try {
+      const nektOpenSZS = await queryNekt(`
+        SELECT COUNT(*) as total
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 14
+        ${getNektCidadeSQL(cityFilter)}
+      `);
+      const nektOpenTotal = parseInt(String(nektOpenSZS.rows[0]?.total || "0"));
+      console.log(`[szs-resultados] Nekt total open pipeline 14${cityFilter ? ` (${cityFilter})` : ""}: ${nektOpenTotal}`);
+      if (nektOpenTotal > 0) {
+        snapshots.Geral.totalOpen = nektOpenTotal; // atualiza o card também
+        const arr = snapHistMap["Geral"];
+        if (arr && arr.length > 0) {
+          const last = arr[arr.length - 1];
+          arr[arr.length - 1] = { ...last, total: nektOpenTotal, openTotal: nektOpenTotal };
+        }
+      }
+    } catch (e) {
+      console.warn("[szs-resultados] Nekt indisponível para open count:", e);
+    }
+
+    // Override last byStage point with Nekt real-time (szs_deals is incomplete ~11k vs 60k+)
+    try {
+      const nektSZSAll = await queryNekt(`
+        SELECT *
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 14
+        ${getNektCidadeSQL(cityFilter)}
+      `);
+
+      const SZS_STAGE_ORDER_MAP: Record<number, number> = {
+        70: 1, 71: 2, 72: 3, 345: 4, 341: 5, 73: 6, 342: 7, 151: 8, 74: 9, 75: 10, 152: 11, 76: 12,
+      };
+      const NEKT_CANAL_SZS: Record<string, string> = {
+        "Marketing": "Marketing",
+        "Mônica": "Mônica", "Monica": "Mônica",
+        "Parceiros": "Parceiros",
+        "Indicação de Corretor": "Ind. Corretor", "Indicacao de Corretor": "Ind. Corretor", "Ind. Corretor": "Ind. Corretor",
+        "Indicação de Franquia": "Ind. Franquia", "Indicaçao de Franquia": "Ind. Franquia", "Indicacao de Franquia": "Ind. Franquia", "Ind. Franquia": "Ind. Franquia",
+        "Indicação de Outros Parceiros": "Ind. Outros Parceiros", "Ind. Outros Parceiros": "Ind. Outros Parceiros",
+        "Expansão": "Expansão", "Expansao": "Expansão", "Expansion": "Expansão",
+        "Spots": "Spots",
+      };
+
+      const nektLastStage: Record<string, Record<string, number>> = {};
+      for (const ch of CHANNEL_ORDER) {
+        nektLastStage[ch] = { mql: 0, sql: 0, opp: 0, reserva: 0, contrato: 0, won: 0 };
+      }
+
+      for (const r of nektSZSAll.rows) {
+        const stageId = parseInt(String(r.etapa || "0"));
+        const so = SZS_STAGE_ORDER_MAP[stageId] || 0;
+        if (so === 0) continue;
+        const canalGroup = NEKT_CANAL_SZS[String(r.canal || "")] || "Outros";
+        const tabs = getChannelTabs(canalGroup);
+        for (const ch of tabs) {
+          if (ch === "Geral") continue; // Geral computed separately below
+          if (so >= 1 && so < TH_SQL_SZS) nektLastStage[ch]["mql"]++;
+          if (so >= TH_SQL_SZS) nektLastStage[ch]["sql"]++;
+          if (so >= TH_OPP_SZS) nektLastStage[ch]["opp"]++;
+          if (so === AGDADOS_ORDER_SZS) nektLastStage[ch]["reserva"]++;
+          if (so === CONTRATO_ORDER_SZS) nektLastStage[ch]["contrato"]++;
+        }
+      }
+
+      // Geral = direct count of all deals (no double-counting from channel tabs)
+      let gMQL = 0, gSQL = 0, gOPP = 0, gReserva = 0, gContrato = 0;
+      for (const r of nektSZSAll.rows) {
+        const so = SZS_STAGE_ORDER_MAP[parseInt(String(r.etapa || "0"))] || 0;
+        if (so === 0) continue;
+        if (so >= 1 && so < TH_SQL_SZS) gMQL++;
+        if (so >= TH_SQL_SZS) gSQL++;
+        if (so >= TH_OPP_SZS) gOPP++;
+        if (so === AGDADOS_ORDER_SZS) gReserva++;
+        if (so === CONTRATO_ORDER_SZS) gContrato++;
+      }
+      nektLastStage["Geral"] = { mql: gMQL, sql: gSQL, opp: gOPP, reserva: gReserva, contrato: gContrato, won: 0 };
+
+      // WON from szs_daily_counts (already aggregated in channelCounts)
+      for (const ch of CHANNEL_ORDER) nektLastStage[ch]["won"] = channelCounts[ch]["won"] || 0;
+
+      // Override last byStage point for all channels
+      for (const ch of CHANNEL_ORDER) {
+        const arr = snapHistMap[ch];
+        if (!arr || arr.length === 0) continue;
+        const last = arr[arr.length - 1];
+        arr[arr.length - 1] = { ...last, byStage: nektLastStage[ch] };
+      }
+      console.log(`[szs-resultados] Nekt byStage override: Geral MQL=${gMQL} SQL=${gSQL} OPP=${gOPP} AgDados=${gReserva} Contrato=${gContrato}`);
+    } catch (e) {
+      console.warn("[szs-resultados] Nekt indisponível para byStage override:", e);
+    }
 
     // Accumulated: deals that reached Ag.Dados (>=11) and Contrato (>=12) this month
     // Count deals that were active in March (won/lost/open) and reached these stages

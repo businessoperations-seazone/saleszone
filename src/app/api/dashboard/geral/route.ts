@@ -383,7 +383,7 @@ export async function GET(req: NextRequest) {
 
       // Stage bucket stock: cumulative counts (deals in stage X also count in all lower stages)
       // MQL = stage_order >= 1, SQL >= 5, OPP >= 9, Reserva >= 13, Contrato >= 14
-      const so = (d as any).stage_order ?? 0;
+      const so = (d as { stage_order?: number }).stage_order ?? 0;
 
       if (d.status === "open") {
         for (let i = addIdx; i < N; i++) {
@@ -436,7 +436,7 @@ export async function GET(req: NextRequest) {
     for (const d of histDeals) {
       if (d.status !== "open") continue;
       if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = (d as any).max_stage_order ?? (d as any).stage_order ?? 0;
+      const mso = (d as { max_stage_order?: number; stage_order?: number }).max_stage_order ?? (d as { stage_order?: number }).stage_order ?? 0;
       if (mso < TH_MQL) continue;
       const macro = getMacroChannel(d.canal);
       openByChannel["Geral"]++;
@@ -453,6 +453,52 @@ export async function GET(req: NextRequest) {
       const geralOpen = nektTotalOpen > 0 ? nektTotalOpen : pdTotalOpen;
       const realOpen = ch === "Geral" && geralOpen > 0 ? geralOpen : openByChannel[ch];
       arr[arr.length - 1] = { ...last, total: realOpen, openTotal: realOpen };
+    }
+
+    // Reserva/Contrato em tempo real via Nekt (stages 191/192 pipeline 28)
+    // Sobrescreve o último ponto do byStage para todos os canais
+    const nektReservaByChannel: Record<string, { reserva: number; contrato: number }> = {
+      Geral: { reserva: 0, contrato: 0 },
+      "Vendas Diretas": { reserva: 0, contrato: 0 },
+      Parceiros: { reserva: 0, contrato: 0 },
+    };
+    try {
+      const nektStages = await queryNekt(`
+        SELECT *
+        FROM nekt_silver.pipedrive_deals_readable
+        WHERE status = 'open' AND pipeline_id = 28 AND CAST(etapa AS INTEGER) IN (191, 192)
+      `);
+      for (const r of nektStages.rows) {
+        const sid = parseInt(String(r.etapa || "0"));
+        const canalId = String(r.canal_id ?? r.canal ?? "");
+        const macro = getMacroChannel(canalId);
+        if (sid === 191) {
+          nektReservaByChannel.Geral.reserva++;
+          if (macro === "Vendas Diretas") nektReservaByChannel["Vendas Diretas"].reserva++;
+          else if (macro === "Parceiros") nektReservaByChannel.Parceiros.reserva++;
+        } else if (sid === 192) {
+          nektReservaByChannel.Geral.contrato++;
+          if (macro === "Vendas Diretas") nektReservaByChannel["Vendas Diretas"].contrato++;
+          else if (macro === "Parceiros") nektReservaByChannel.Parceiros.contrato++;
+        }
+      }
+      console.log(`[geral/nekt-stages] reserva/contrato:`, JSON.stringify(nektReservaByChannel));
+      for (const ch of HIST_CHANNELS) {
+        const arr = channelHistory[ch];
+        if (!arr || arr.length === 0) continue;
+        const last = arr[arr.length - 1];
+        const nr = nektReservaByChannel[ch];
+        arr[arr.length - 1] = {
+          ...last,
+          byStage: {
+            ...last.byStage,
+            reserva: nr.reserva,   // exclusivo: deals no stage 191
+            contrato: nr.contrato, // exclusivo: deals no stage 192
+          },
+        };
+      }
+    } catch (e) {
+      console.warn("[geral] Nekt indisponível para reserva/contrato stages:", e);
     }
 
     // ── 8. Ocupação Agenda + No-Show ──
@@ -507,7 +553,7 @@ export async function GET(req: NextRequest) {
         )
       : [];
     const noShowTotal = noShowRows.length;
-    const noShowCanceladas = noShowRows.filter((e: any) => e.cancelou).length;
+    const noShowCanceladas = noShowRows.filter((e: { cancelou: boolean | null }) => e.cancelou).length;
     const noShowPct = noShowTotal > 0 ? Math.round((noShowCanceladas / noShowTotal) * 1000) / 10 : 0;
 
     // ── Build channels ──
@@ -551,8 +597,11 @@ export async function GET(req: NextRequest) {
       // All channels get snapshots
       result.snapshots = snap;
       const chAgendadas = agendaByChannel[name] ?? 0;
-      result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
-      result.ocupacaoAgenda = { agendadas: chAgendadas, capacidade, percent: capacidade > 0 ? Math.round((chAgendadas / capacidade) * 1000) / 10 : 0 };
+      // Parceiros não tem reuniões — zera No-Show e Ocupação Agenda
+      if (name !== "Parceiros") {
+        result.noShow = { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct };
+        result.ocupacaoAgenda = { agendadas: chAgendadas, capacidade, percent: capacidade > 0 ? Math.round((chAgendadas / capacidade) * 1000) / 10 : 0 };
+      }
 
       // Geral: reservaHistory (latest accumulated values)
       if (name === "Geral") {

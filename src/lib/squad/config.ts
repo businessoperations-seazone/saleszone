@@ -35,13 +35,18 @@ export interface PipelineConfig {
 const SZI_SQUADS: Squad[] = [
   {
     id: 1, name: 'Squad 1', color: '#2563EB',
-    marketing: 'Jean', preVenda: ['Hellen Dias'], venda: ['Luana Schaikoski'],
-    empreendimentos: ['Ponta das Canas Spot II', 'Itacaré Spot', 'Marista 144 Spot', 'Jurerê Spot II', 'Jurerê Spot III', 'Vistas de Anitá II'],
+    marketing: 'Jean', preVenda: ['Carolina Maeda'], venda: ['Luana Schaikoski'],
+    empreendimentos: ['Ponta das Canas Spot II', 'Marista 144 Spot', 'Jurerê Spot II', 'Jurerê Spot III', 'Vistas de Anitá II'],
   },
   {
     id: 2, name: 'Squad 2', color: '#F97316',
     marketing: 'Jean', preVenda: ['Jeniffer Correa'], venda: ['Filipe Padoveze'],
-    empreendimentos: ['Barra Grande Spot', 'Natal Spot', 'Novo Campeche Spot II', 'Caraguá Spot', 'Bonito Spot II'],
+    empreendimentos: ['Natal Spot', 'Novo Campeche Spot II', 'Caraguá Spot'],
+  },
+  {
+    id: 3, name: 'Squad 3', color: '#10B981',
+    marketing: 'Jean', preVenda: ['Karoane Izabela Soares'], venda: ['Hellen Dias'],
+    empreendimentos: ['Itacaré Spot', 'Bonito Spot II', 'Barra Grande Spot'],
   },
 ]
 
@@ -75,7 +80,7 @@ const SZS_EMP_OPTIONS: Record<number, string> = {}
 const MKT_SQUADS: Squad[] = [
   {
     id: 1, name: 'Marketplace', color: '#0EA5E9',
-    marketing: '', preVenda: ['Karoane Izabela Soares', 'Karoline Borges'], venda: [],
+    marketing: '', preVenda: ['Karoline Borges'], venda: [],
     empreendimentos: [
       'Foz Spot', 'Rosa Sul Spot', 'Cachoeira Beach Spot', 'Meireles Spot',
       'Ilha do Campeche II Spot', 'Ingleses Spot', 'Bonito Spot', 'Santinho Spot',

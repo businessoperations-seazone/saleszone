@@ -130,6 +130,8 @@ function findSquadId(name: string): number | null {
 
 export async function GET() {
   try {
+    const admin = createSquadSupabaseAdmin();
+
     const { data: rows, error } = await supabase
       .from("squad_presales_response")
       .select("deal_id, deal_title, preseller_name, transbordo_at, first_action_at, response_time_minutes, action_type, last_mia_at")
@@ -142,13 +144,40 @@ export async function GET() {
     const deals = (rows || []).filter((d) => MAIN_PVS.includes(d.preseller_name));
     const now = new Date();
 
+    // Para presellers do squad sem dados em squad_presales_response, buscar de squad_deals
+    const presentInPresales = new Set(deals.map((d) => d.preseller_name));
+    const missingPVs = MAIN_PVS.filter((pv) => !presentInPresales.has(pv));
+
+    if (missingPVs.length > 0) {
+      const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().substring(0, 10);
+      for (const pv of missingPVs) {
+        const { data: pvDeals } = await admin
+          .from("squad_deals")
+          .select("deal_id, title, preseller_name, add_time, last_activity_date, status")
+          .eq("preseller_name", pv)
+          .eq("status", "open")
+          .gte("add_time", cutoff);
+        for (const d of pvDeals || []) {
+          deals.push({
+            deal_id: d.deal_id,
+            deal_title: d.title || "",
+            preseller_name: d.preseller_name,
+            transbordo_at: d.add_time,
+            first_action_at: d.last_activity_date ? `${d.last_activity_date}T12:00:00+00:00` : null,
+            response_time_minutes: null,
+            action_type: null,
+            last_mia_at: null,
+          });
+        }
+      }
+    }
+
     // Buscar add_time dos deals (de squad_deals, que tem dados atualizados)
     const dealIds = deals.map((d) => Number(d.deal_id));
     const addTimeMap = new Map<number, string>();
     // Paginar em batches de 500 (limite do .in())
     for (let i = 0; i < dealIds.length; i += 500) {
       const batch = dealIds.slice(i, i + 500);
-      const admin = createSquadSupabaseAdmin();
       const { data: dealsExtra } = await admin
         .from("squad_deals")
         .select("deal_id, add_time")

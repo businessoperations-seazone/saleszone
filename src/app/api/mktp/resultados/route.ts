@@ -141,6 +141,7 @@ export async function GET() {
     );
 
     // Merge, dedup by deal_id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const dealMap = new Map<number, any>();
     for (const d of allDeals) dealMap.set(d.deal_id, d);
     for (const d of wonDeals) dealMap.set(d.deal_id, d);
@@ -348,8 +349,8 @@ export async function GET() {
         .range(o, o + ps - 1)
     );
 
-    let noShowTotal = noShowRows.length;
-    let noShowCanceladas = noShowRows.filter((e: any) => e.cancelou).length;
+    const noShowTotal = noShowRows.length;
+    const noShowCanceladas = noShowRows.filter((e: { cancelou: boolean | null }) => e.cancelou).length;
     const noShowPct = noShowTotal > 0 ? Math.round((noShowCanceladas / noShowTotal) * 1000) / 10 : 0;
 
     /* ── 6. History — cumulative open deals from mktp_deals (delta approach) ── */
@@ -393,7 +394,7 @@ export async function GET() {
       const mso = d.max_stage_order || 0;
       const group = getCanalGroup(String(d.canal || ""));
 
-      let addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
+      const addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
       if (addIdx < 0) continue;
 
       let closeIdx: number | null = null;
@@ -510,8 +511,9 @@ export async function GET() {
           aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
           emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
         },
-        ocupacaoAgenda: { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
-        noShow: { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
+        // Parcerias não tem reuniões — zera No-Show e Ocupação Agenda
+        ocupacaoAgenda: name === "Parcerias" ? { agendadas: 0, capacidade: 0, percent: 0 } : { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
+        noShow: name === "Parcerias" ? { canceladas: 0, total: 0, percent: 0 } : { canceladas: noShowCanceladas, total: noShowTotal, percent: noShowPct },
         dealsHistory,
       };
     });

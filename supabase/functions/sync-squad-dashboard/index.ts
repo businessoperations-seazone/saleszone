@@ -32,9 +32,9 @@ const SQL_MIN_ORDER = 5;  // Qualificado
 const OPP_MIN_ORDER = 9;  // Reunião Realizada/OPP
 
 const SQUADS = [
-  { id: 1, closers: 1, empreendimentos: ["Ponta das Canas Spot II", "Itacaré Spot", "Marista 144 Spot"] },
-  { id: 2, closers: 2, empreendimentos: ["Natal Spot", "Novo Campeche Spot II", "Caraguá Spot", "Bonito Spot II"] },
-  { id: 3, closers: 2, empreendimentos: ["Jurerê Spot II", "Jurerê Spot III", "Barra Grande Spot", "Vistas de Anitá II"] },
+  { id: 1, closers: 1, empreendimentos: ["Ponta das Canas Spot II", "Marista 144 Spot", "Jurerê Spot II", "Jurerê Spot III", "Vistas de Anitá II"] },
+  { id: 2, closers: 1, empreendimentos: ["Natal Spot", "Novo Campeche Spot II", "Caraguá Spot"] },
+  { id: 3, closers: 1, empreendimentos: ["Itacaré Spot", "Bonito Spot II", "Barra Grande Spot"] },
 ];
 const TOTAL_CLOSERS = SQUADS.reduce((sum, sq) => sum + sq.closers, 0);
 // Empreendimentos fora dos squads ativos mas presentes no pipeline 28 Marketing
