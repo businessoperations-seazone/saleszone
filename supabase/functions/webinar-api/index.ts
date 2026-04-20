@@ -801,6 +801,9 @@ async function handleSessions(method: string, segments: string[], req: Request) 
       updateData.cancelled_at = new Date().toISOString();
       updateData.cancel_reason = (data.cancel_reason as string) || "Sessão cancelada";
       // Morada notification is skipped (stub)
+    } else if (newStatus === "scheduled") {
+      updateData.cancelled_at = null;
+      updateData.cancel_reason = null;
     }
 
     const { data: updated, error } = await supabase.from("webinar_sessions").update(updateData).eq("id", sessionId).select().single();
