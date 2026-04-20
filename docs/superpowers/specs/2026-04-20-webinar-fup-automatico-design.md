@@ -69,7 +69,9 @@ Toda a integração com Timelines/Slack é *best-effort* (segue o padrão já us
 
 ## Alterações no schema
 
-Migration nova: `backend/sql/00X_add_fup_sent_at.sql`
+Migration nova em `scripts/webinar-platform/sql/` (pasta já existe com padrão `NNN_descritivo.sql` — hoje tem `001_create_tables.sql` e `002_add_closers.sql`). Arquivo: `003_add_fup_sent_at.sql`.
+
+Observação: as colunas `is_opportunity`, `opportunity_marked_at`, `no_show_at`, `fireflies_transcript_id`, `transcript_summary`, `transcript_synced_at`, `pipedrive_transcript_note_id`, `pipedrive_deal_url`, `observacoes`, `cidade`, `tipo_imovel` existem no banco mas **não** em nenhum arquivo SQL versionado — foram adicionadas ad-hoc. O plan deve decidir se esta migration também re-declara essas colunas com `IF NOT EXISTS` (para alinhar o arquivo ao banco) ou apenas adiciona o novo campo. Recomendação: só adicionar o novo — correção do histórico vira outro ticket.
 
 ```sql
 ALTER TABLE webinar_registrations
@@ -120,7 +122,7 @@ def update_registration(reg_id):
     # 4. Retorna 200 com updated
 ```
 
-Separar o hook em função própria (`_maybe_send_fup`) dentro de `admin.py` ou em `services/webinar_fup.py` — decisão no plano de implementação. Preferência: arquivo próprio `services/webinar_fup.py` para manter `admin.py` focado em roteamento.
+Hook isolado em `backend/services/webinar_fup.py` (mantém `admin.py` focado em roteamento; mantém integração Timelines testável em isolamento).
 
 ### 4. Template da mensagem
 
@@ -142,12 +144,11 @@ E se quiser, já me manda quantos leitos tem o seu imóvel que eu preparo o orç
 
 1. **DRY_RUN padrão `true`.** Flag no `.env`/config. Primeira semana operando sem enviar nada — só Slack preview.
 2. **Dedup por `fup_sent_at`.** Só marca após `send_message` OK. Segundo PATCH no mesmo lead não re-dispara depois de enviado.
-3. **Whitelist de closer.** Campo `closer_id` do session é comparado contra a Mayara (slug ou email configurado via env var `FUP_ALLOWED_CLOSER_SLUG=mayara-marques` — não hard-code). Outros closers ignorados silenciosamente.
+3. **Whitelist de closer.** Resolução: a partir do `registration.session_id`, fazer JOIN em `webinar_sessions.closer_id`, e dessa em `webinar_closers.slug`. Comparar contra env var `FUP_ALLOWED_CLOSER_SLUG=mayara-marques` (não hard-code). Outros closers ignorados silenciosamente. Observação: o `require_admin()` atual apenas valida que o requester é `@seazone.com.br` — ele não identifica *qual* closer está logado, então a whitelist é do **dono da sessão** (quem apresentou), não do usuário autenticado.
 4. **Cutoff de atendimento.** Se `attended_at` for `NULL`, não dispara (não envia FUP pra quem não esteve presente, mesmo que tenha virado oportunidade).
 5. **Validação de telefone.** Se `phone` for vazio/inválido (básico: ≥ 10 dígitos), skip + log. Sem tentativa de correção.
-6. **Cutoff de idade do marcador.** Opcional no MVP: se `opportunity_marked_at` for mais velho que 24h no momento do PATCH, skip — evita disparos em histórico caso a Mayara re-edite algo antigo. Só faz sentido se a transição `false → true` puder acontecer duas vezes (improvável, mas barato).
-7. **Log Slack obrigatório.** Todo disparo (real ou dry-run) é logado no DM `D07M0MKUJUS` (JP) com: reg_id, deal_id, nome, phone, sessão, mensagem final, resultado. Auditoria retroativa.
-8. **Kill switch.** Flipar `DRY_RUN_FUP=true` no `.env` interrompe envios imediatamente sem redeploy — só reload do backend.
+6. **Log Slack obrigatório.** Todo disparo (real ou dry-run) é logado no DM `D07M0MKUJUS` (JP) com: reg_id, deal_id, nome, phone, sessão, mensagem final, resultado. Auditoria retroativa.
+7. **Kill switch.** Flipar `DRY_RUN_FUP=true` no `.env` interrompe envios imediatamente sem redeploy — só reload do backend.
 
 ## Observabilidade
 
@@ -157,9 +158,9 @@ E se quiser, já me manda quantos leitos tem o seu imóvel que eu preparo o orç
 
 ## Testes
 
-Projeto já tem `backend/tests/` com pytest. Adicionar:
+Projeto já tem `backend/tests/` com pytest (inclui `test_admin.py`). Adicionar:
 
-1. **`test_admin_patch_registration.py`**
+1. Novos casos em **`backend/tests/test_admin.py`** (complementa o existente):
    - 200 + update simples quando body não muda `is_opportunity`.
    - 200 + dispara FUP quando `is_opportunity` vira true e condições OK.
    - 200 + NÃO dispara quando `attended_at` é null.
@@ -167,11 +168,11 @@ Projeto já tem `backend/tests/` com pytest. Adicionar:
    - 200 + NÃO dispara quando closer ≠ Mayara.
    - 200 + modo dry-run não chama `timelines.send_message`.
 
-2. **`test_webinar_fup.py`** (unit do hook)
+2. **`backend/tests/test_webinar_fup.py`** (unit do hook, novo arquivo)
    - `_should_send_fup(previous, updated, closer_slug)` retorna True/False correto em cada combinação.
    - Formatação do template com nome composto, nome com 1 palavra, nome vazio.
 
-3. **`test_timelines.py`** (smoke, mocks HTTP)
+3. **`backend/tests/test_timelines.py`** (smoke, mocks HTTP, novo arquivo)
    - `find_chat_id` parseia response corretamente.
    - `send_message` monta payload correto.
 
