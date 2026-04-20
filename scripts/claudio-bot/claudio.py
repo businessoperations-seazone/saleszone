@@ -83,6 +83,24 @@ def pipedrive_get(endpoint, params=None):
             time.sleep(wait)
 
 
+def fetch_users():
+    """Retorna lista de usuarios do Pipedrive (inclui inativos)."""
+    data = pipedrive_get("users")
+    if data and data.get("success"):
+        return data.get("data") or []
+    return []
+
+
+def get_inactive_user_ids():
+    """Set de user_ids com active_flag=False (ex-funcionarios)."""
+    users = fetch_users()
+    return {u["id"] for u in users if not u.get("active_flag")}
+
+
+# Marker usado internamente pra agrupar deals de donos inativos sob um gestor.
+EX_OWNER_MARKER = "__EX__"
+
+
 def fetch_pipeline_deals(pipeline_id):
     """Busca todos os deals abertos de um pipeline, com paginacao."""
     all_deals = []
@@ -205,29 +223,24 @@ def _days_overdue(next_activity_date_str):
     return int(diff_seconds // 86400)
 
 
-def classify_deals(deals, pipeline_key):
+def classify_deals(deals, pipeline_key, inactive_user_ids=None):
     """
     Classifica deals em duas categorias, agrupados por role → owner.
     Logica alinhada com o dashboard Supervisor Claudio.
 
-    O dashboard conta TODOS os owners nao-excluidos (lista di[]) por pipeline,
-    sem filtrar por Configuracoes de usuario. O bot replica esse comportamento.
+    Quando inactive_user_ids e passado e o owner do deal esta la, o deal vai
+    pro bucket EX_OWNER_MARKER (agrupa todos ex-funcionarios do mesmo role)
+    e bypassa o filtro de PIPELINE_USERS — o gestor do funil redistribui.
 
     Categorias:
-      sem_atividade — next_activity_date vazio (nenhuma atividade agendada)
-      atrasados     — tem next_activity_date no passado (>1 dia de atraso no calculo do dashboard)
-
-    Retorna:
-      {
-        "sem_atividade": {"PV": {"Owner": [ids]}, "Closer": {"Owner": [ids]}},
-        "atrasados":     {"PV": {"Owner": [ids]}, "Closer": {"Owner": [ids]}},
-      }
+      sem_atividade — next_activity_date vazio
+      atrasados     — tem next_activity_date no passado (>1 dia)
     """
     result = {
         "sem_atividade": {"PV": {}, "Closer": {}},
         "atrasados":     {"PV": {}, "Closer": {}},
     }
-
+    inactive_user_ids = inactive_user_ids or set()
     allowed_owners = PIPELINE_USERS.get(pipeline_key, set())
 
     for deal in deals:
@@ -235,8 +248,14 @@ def classify_deals(deals, pipeline_key):
         if not owner or owner in EXCLUDED_OWNERS:
             continue
 
-        # Filtro de pipeline: so contabiliza owners configurados no dashboard
-        if allowed_owners and owner not in allowed_owners:
+        user_id = deal.get("user_id")
+        if isinstance(user_id, dict):
+            user_id = user_id.get("id")
+        is_inactive = user_id in inactive_user_ids
+
+        # PIPELINE_USERS filter: pula quando ATIVO mas nao listado.
+        # Inativos bypassam o filtro — sempre caem no bucket EX.
+        if not is_inactive and allowed_owners and owner not in allowed_owners:
             continue
 
         deal_id = deal.get("id")
@@ -254,8 +273,9 @@ def classify_deals(deals, pipeline_key):
 
         if owner in TEAM_MAP:
             role = TEAM_MAP[owner]["role"]
+        elif is_inactive:
+            role = "PV"  # fallback: inativo sem TEAM_MAP → vai pro gestor de PV
         else:
-            # Owner nao mapeado: atribuir role "PV" por default e logar
             role = "PV"
             log.info("Owner '%s' nao esta no TEAM_MAP — atribuido role PV (pipeline %s)",
                      owner, pipeline_key)
@@ -265,7 +285,8 @@ def classify_deals(deals, pipeline_key):
         if category == "sem_atividade" and role == "PV":
             continue
 
-        result[category][role].setdefault(owner, []).append(deal_id)
+        bucket_owner = EX_OWNER_MARKER if is_inactive else owner
+        result[category][role].setdefault(bucket_owner, []).append(deal_id)
 
     return result
 
@@ -302,30 +323,39 @@ def build_main_message(pipeline_name, role_label, total_deals, manager_id, categ
     )
 
 
-def build_agent_replies(owner, deals, category, part_num=None, total_parts=None):
-    """Reply na thread para um agente. Retorna texto formatado."""
-    info = TEAM_MAP.get(owner, {})
-    slack_id = info.get("slackId", "")
-    mention = f"<@{slack_id}>" if slack_id else owner
+def build_agent_replies(owner, deals, category, part_num=None, total_parts=None, manager_id=None):
+    """Reply na thread para um agente. Retorna texto formatado.
+
+    Quando owner == EX_OWNER_MARKER, usa manager_id como mention e rotula
+    como "Ex-funcionarios (distribuir)".
+    """
+    if owner == EX_OWNER_MARKER:
+        mention = f"<@{manager_id}>" if manager_id else "(gestor)"
+        display = "Ex-funcionários (distribuir)"
+    else:
+        info = TEAM_MAP.get(owner, {})
+        slack_id = info.get("slackId", "")
+        mention = f"<@{slack_id}>" if slack_id else owner
+        display = owner
     count = len(deals)
     label = CATEGORY_CONFIG[category]["agent_label"]
 
     if part_num and total_parts and total_parts > 1:
         if part_num == 1:
-            header = f"{mention} _{owner}_ — {count} {label} (parte {part_num}/{total_parts})"
+            header = f"{mention} _{display}_ — {count} {label} (parte {part_num}/{total_parts})"
         else:
-            header = f"_{owner}_ — continuação (parte {part_num}/{total_parts})"
+            header = f"_{display}_ — continuação (parte {part_num}/{total_parts})"
     else:
-        header = f"{mention} _{owner}_ — {count} {label}"
+        header = f"{mention} _{display}_ — {count} {label}"
 
     links = " · ".join(build_deal_link(d) for d in deals)
     return f"{header}\n\n{links}"
 
 
-def split_agent_messages(owner, deal_ids, category):
+def split_agent_messages(owner, deal_ids, category, manager_id=None):
     """Divide deals em partes se a mensagem exceder MAX_MESSAGE_CHARS."""
     # Tenta mensagem unica primeiro
-    single = build_agent_replies(owner, deal_ids, category)
+    single = build_agent_replies(owner, deal_ids, category, manager_id=manager_id)
     if len(single) <= MAX_MESSAGE_CHARS:
         return [single]
 
@@ -336,7 +366,8 @@ def split_agent_messages(owner, deal_ids, category):
         parts.append(chunk)
 
     total = len(parts)
-    return [build_agent_replies(owner, parts[i], category, i + 1, total) for i in range(total)]
+    return [build_agent_replies(owner, parts[i], category, i + 1, total, manager_id=manager_id)
+            for i in range(total)]
 
 
 # ── Slack API ────────────────────────────────────────────────
@@ -388,11 +419,11 @@ def slack_post(channel, text, thread_ts=None, dry_run=False):
 
 # ── Orquestracao ─────────────────────────────────────────────
 
-def run_pipeline(pipeline_key, dry_run=False, test_mode=False, extra_deals=None):
+def run_pipeline(pipeline_key, dry_run=False, test_mode=False, extra_deals=None, inactive_user_ids=None):
     """Processa um pipeline completo: fetch → classify → send (2 categorias).
 
-    extra_deals: lista opcional de deals ja filtrados (ex: lost com overdue activity)
-    a serem incluidos junto dos abertos antes da classificacao.
+    extra_deals: deals pre-filtrados (ex: lost com overdue) a adicionar aos abertos.
+    inactive_user_ids: set de user_ids inativos no Pipedrive (ex-funcionarios).
     """
     pipeline = PIPELINES[pipeline_key]
     pipeline_id = pipeline["id"]
@@ -412,7 +443,7 @@ def run_pipeline(pipeline_key, dry_run=False, test_mode=False, extra_deals=None)
         log.info("+ %d lost com atividade vencida (total: %d)", len(extra_deals), len(deals))
 
     # Classify (retorna {"sem_atividade": {...}, "atrasados": {...}})
-    classified = classify_deals(deals, pipeline_key)
+    classified = classify_deals(deals, pipeline_key, inactive_user_ids=inactive_user_ids)
 
     role_config = {
         "PV": {"label": "Pré-vendas", "manager": managers.get("pv")},
@@ -453,7 +484,7 @@ def run_pipeline(pipeline_key, dry_run=False, test_mode=False, extra_deals=None)
             sorted_owners = sorted(owners.items(), key=lambda x: len(x[1]), reverse=True)
 
             for owner_name, deal_ids in sorted_owners:
-                messages = split_agent_messages(owner_name, deal_ids, category)
+                messages = split_agent_messages(owner_name, deal_ids, category, manager_id=manager_id)
                 for msg in messages:
                     slack_post(channel, msg, thread_ts=main_ts, dry_run=dry_run)
                     time.sleep(SLACK_DELAY_SECONDS)
@@ -500,7 +531,14 @@ def run_check(dry_run=False, test_mode=False):
         log.info("MODO TESTE: mensagens enviadas para #supervisor-claudio")
     log.info("=" * 60)
 
-    # Fetch global: lost deals com atividade vencida (1 chamada, reutilizada por todos pipelines)
+    # Fetch global: ex-funcionarios (users inativos no Pipedrive) e lost com overdue
+    try:
+        inactive_user_ids = get_inactive_user_ids()
+        log.info("Ex-funcionarios (active_flag=False): %d", len(inactive_user_ids))
+    except Exception as e:
+        log.error("Erro ao buscar users: %s", e)
+        inactive_user_ids = set()
+
     try:
         lost_overdue = fetch_lost_deals_with_overdue_activity(datetime.now())
     except Exception as e:
@@ -516,7 +554,10 @@ def run_check(dry_run=False, test_mode=False):
     for key in PIPELINES:
         try:
             extra = lost_by_pipeline.get(PIPELINES[key]["id"], [])
-            snapshot = run_pipeline(key, dry_run=dry_run, test_mode=test_mode, extra_deals=extra)
+            snapshot = run_pipeline(
+                key, dry_run=dry_run, test_mode=test_mode,
+                extra_deals=extra, inactive_user_ids=inactive_user_ids,
+            )
             if snapshot:
                 all_snapshots[key] = snapshot
         except Exception as e:

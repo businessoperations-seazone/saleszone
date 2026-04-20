@@ -243,5 +243,57 @@ class TestClaudioSemAtividadePV(unittest.TestCase):
         self.assertEqual(result["atrasados"]["PV"]["Larissa Marques"], [3])
 
 
+class TestInactiveOwners(unittest.TestCase):
+    """Owners com user_id inativo vao pro bucket EX_OWNER_MARKER (formato b)."""
+
+    def test_warning_semanal_agrupa_inativos_em_ex_marker(self):
+        deals = [
+            {"id": 1, "owner_name": "Natália Saramago", "user_id": 24602778},  # inativa
+            {"id": 2, "owner_name": "Natália Saramago", "user_id": 24602778},
+            {"id": 3, "owner_name": "Hellen Dias", "user_id": 99999},  # ativa
+        ]
+        result = ws.classify_by_role(deals, "SZI", inactive_user_ids={24602778})
+        self.assertEqual(result["PV"][ws.EX_OWNER_MARKER], [1, 2])
+        self.assertEqual(result["PV"]["Hellen Dias"], [3])
+
+    def test_warning_semanal_inativo_bypassa_pipeline_users(self):
+        # Owner nao esta em PIPELINE_USERS["SZI"] mas e inativo — passa
+        deals = [{"id": 1, "owner_name": "Pessoa Saiu Nunca Foi", "user_id": 111}]
+        result = ws.classify_by_role(deals, "SZI", inactive_user_ids={111})
+        self.assertEqual(result["PV"][ws.EX_OWNER_MARKER], [1])
+
+    def test_build_agent_reply_ex_marker_usa_manager_mention(self):
+        msg = ws.build_agent_reply(ws.EX_OWNER_MARKER, [100, 101], "reativacao", manager_id="U123")
+        self.assertIn("<@U123>", msg)
+        self.assertIn("Ex-funcionários (distribuir)", msg)
+        self.assertNotIn("__EX__", msg)
+
+    def test_claudio_classify_inativo_em_ex_marker(self):
+        past = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+        deals = [{
+            "id": 99,
+            "owner_name": "Natália Saramago",
+            "user_id": 24602778,
+            "next_activity_date": past,
+            "status": "open",
+        }]
+        result = claudio.classify_deals(deals, "SZI", inactive_user_ids={24602778})
+        self.assertEqual(result["atrasados"]["PV"][claudio.EX_OWNER_MARKER], [99])
+
+    def test_claudio_build_agent_replies_ex_marker(self):
+        msg = claudio.build_agent_replies(
+            claudio.EX_OWNER_MARKER, [100], "atrasados", manager_id="U123"
+        )
+        self.assertIn("<@U123>", msg)
+        self.assertIn("Ex-funcionários (distribuir)", msg)
+        self.assertNotIn("__EX__", msg)
+
+    def test_user_id_como_dict_extrai_id(self):
+        # Pipedrive as vezes retorna user_id como {"id": X}
+        deals = [{"id": 1, "owner_name": "X", "user_id": {"id": 24602778}}]
+        result = ws.classify_by_role(deals, "SZI", inactive_user_ids={24602778})
+        self.assertEqual(result["PV"][ws.EX_OWNER_MARKER], [1])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -38,7 +38,9 @@ from claudio import (
     _has_next_activity,
     fetch_activities_in_range,
     fetch_deals_batch,
+    get_inactive_user_ids,
     MONITORED_PIPELINE_IDS,
+    EX_OWNER_MARKER,
 )
 
 # ── Logging ──
@@ -124,18 +126,31 @@ def filter_reativacao(deals):
     return result
 
 
-def classify_by_role(deals, pipeline_key):
-    """Agrupa deals por role (PV/Closer) x owner, respeitando EXCLUDED_OWNERS e PIPELINE_USERS."""
+def classify_by_role(deals, pipeline_key, inactive_user_ids=None):
+    """Agrupa deals por role (PV/Closer) x owner, respeitando EXCLUDED_OWNERS e PIPELINE_USERS.
+
+    Quando inactive_user_ids e passado e o owner do deal esta la, o deal cai no
+    bucket EX_OWNER_MARKER (bypassa PIPELINE_USERS) — gestor redistribui.
+    """
     result = {"PV": {}, "Closer": {}}
+    inactive_user_ids = inactive_user_ids or set()
     allowed = PIPELINE_USERS.get(pipeline_key, set())
     for d in deals:
         owner = d.get("owner_name") or ""
         if not owner or owner in EXCLUDED_OWNERS:
             continue
-        if allowed and owner not in allowed:
+        user_id = d.get("user_id")
+        if isinstance(user_id, dict):
+            user_id = user_id.get("id")
+        is_inactive = user_id in inactive_user_ids
+
+        if not is_inactive and allowed and owner not in allowed:
             continue
+
         if owner in TEAM_MAP:
             role = TEAM_MAP[owner]["role"]
+        elif is_inactive:
+            role = "PV"
         else:
             role = "PV"
             log.info(
@@ -143,7 +158,8 @@ def classify_by_role(deals, pipeline_key):
                 owner,
                 pipeline_key,
             )
-        result[role].setdefault(owner, []).append(d.get("id"))
+        bucket = EX_OWNER_MARKER if is_inactive else owner
+        result[role].setdefault(bucket, []).append(d.get("id"))
     return result
 
 
@@ -173,30 +189,36 @@ def build_main_message_semanal(pipeline_name, role_label, total, manager_id, cat
     )
 
 
-def build_agent_reply(owner, deal_ids, category, part_num=None, total_parts=None):
-    info = TEAM_MAP.get(owner, {})
-    slack_id = info.get("slackId", "")
-    mention = f"<@{slack_id}>" if slack_id else owner
+def build_agent_reply(owner, deal_ids, category, part_num=None, total_parts=None, manager_id=None):
+    if owner == EX_OWNER_MARKER:
+        mention = f"<@{manager_id}>" if manager_id else "(gestor)"
+        display = "Ex-funcionários (distribuir)"
+    else:
+        info = TEAM_MAP.get(owner, {})
+        slack_id = info.get("slackId", "")
+        mention = f"<@{slack_id}>" if slack_id else owner
+        display = owner
     count = len(deal_ids)
     label = CATEGORY_CONFIG_SEMANAL[category]["agent_label"]
     if part_num and total_parts and total_parts > 1:
         if part_num == 1:
-            header = f"{mention} _{owner}_ — {count} {label} (parte {part_num}/{total_parts})"
+            header = f"{mention} _{display}_ — {count} {label} (parte {part_num}/{total_parts})"
         else:
-            header = f"_{owner}_ — continuacao (parte {part_num}/{total_parts})"
+            header = f"_{display}_ — continuacao (parte {part_num}/{total_parts})"
     else:
-        header = f"{mention} _{owner}_ — {count} {label}"
+        header = f"{mention} _{display}_ — {count} {label}"
     links = " · ".join(build_deal_link(d) for d in deal_ids)
     return f"{header}\n\n{links}"
 
 
-def split_agent_messages(owner, deal_ids, category):
-    single = build_agent_reply(owner, deal_ids, category)
+def split_agent_messages(owner, deal_ids, category, manager_id=None):
+    single = build_agent_reply(owner, deal_ids, category, manager_id=manager_id)
     if len(single) <= MAX_MESSAGE_CHARS:
         return [single]
     parts = [deal_ids[i:i + MAX_DEALS_PER_PART] for i in range(0, len(deal_ids), MAX_DEALS_PER_PART)]
     total = len(parts)
-    return [build_agent_reply(owner, parts[i], category, i + 1, total) for i in range(total)]
+    return [build_agent_reply(owner, parts[i], category, i + 1, total, manager_id=manager_id)
+            for i in range(total)]
 
 
 # ── Pipedrive fetchers ──
@@ -272,15 +294,26 @@ def _send_pipeline_block(pipeline_key, classified, channel, category, dry_run):
             continue
         sorted_owners = sorted(owners.items(), key=lambda x: len(x[1]), reverse=True)
         for owner_name, deal_ids in sorted_owners:
-            for msg in split_agent_messages(owner_name, deal_ids, category):
+            for msg in split_agent_messages(owner_name, deal_ids, category, manager_id=manager_id):
                 slack_post(channel, msg, thread_ts=main_ts, dry_run=dry_run)
                 time.sleep(SLACK_DELAY_SECONDS)
     return totals
 
 
+def _fetch_inactives():
+    try:
+        ids = get_inactive_user_ids()
+        log.info("Ex-funcionarios (active_flag=False): %d", len(ids))
+        return ids
+    except Exception as e:
+        log.error("Erro ao buscar users: %s", e)
+        return set()
+
+
 def run_sexta(today, dry_run=False, test_mode=False):
     week_start, week_end = get_date_range(today, "sexta")
     log.info("Warning SEXTA — losts entre %s e %s", week_start, week_end)
+    inactive_ids = _fetch_inactives()
     all_deals = fetch_lost_deals_recent(week_start)
     log.info("Fetched %d lost deals recentes (pre-filtro)", len(all_deals))
     filtered = filter_losts_sem_atividade(all_deals, week_start, week_end)
@@ -293,7 +326,7 @@ def run_sexta(today, dry_run=False, test_mode=False):
             by_pipeline.setdefault(key, []).append(d)
 
     for pipeline_key, deals in by_pipeline.items():
-        classified = classify_by_role(deals, pipeline_key)
+        classified = classify_by_role(deals, pipeline_key, inactive_user_ids=inactive_ids)
         channel = DM_JP_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
         totals = _send_pipeline_block(pipeline_key, classified, channel, "losts_semana", dry_run)
         log.info("Pipeline %s losts_semana: %s", pipeline_key, totals)
@@ -302,6 +335,7 @@ def run_sexta(today, dry_run=False, test_mode=False):
 def run_diario(today, dry_run=False, test_mode=False):
     day_start, day_end = get_date_range(today, "diario")
     log.info("Warning DIARIO — atividades de hoje %s", day_start.date())
+    inactive_ids = _fetch_inactives()
     activities = fetch_activities_in_range(day_start, day_end)
     log.info("Fetched %d atividades abertas de hoje", len(activities))
 
@@ -321,7 +355,7 @@ def run_diario(today, dry_run=False, test_mode=False):
             by_pipeline.setdefault(key, []).append(d)
 
     for pipeline_key, deals in by_pipeline.items():
-        classified = classify_by_role(deals, pipeline_key)
+        classified = classify_by_role(deals, pipeline_key, inactive_user_ids=inactive_ids)
         channel = DM_JP_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
         totals = _send_pipeline_block(pipeline_key, classified, channel, "reativacao", dry_run)
         log.info("Pipeline %s reativacao: %s", pipeline_key, totals)
