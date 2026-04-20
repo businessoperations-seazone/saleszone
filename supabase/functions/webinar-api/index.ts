@@ -1046,6 +1046,17 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
 
     const roomUrl = `${FRONTEND_URL}/webinar/sala/${newSessionId}?token=${newReg.access_token}`;
 
+    // Apply Webinar label to deal on reschedule (best-effort)
+    try {
+      const dealIdForLabel = extractDealId(old.pipedrive_deal_url as string | null);
+      if (dealIdForLabel) {
+        const labelResult = await pipedriveAddWebinarLabel(dealIdForLabel);
+        console.log(`[webinar-api] Webinar label on reschedule deal ${dealIdForLabel}:`, labelResult);
+      }
+    } catch (err) {
+      console.error("[webinar-api] Failed to apply webinar label on reschedule:", err);
+    }
+
     // Send confirmation email for the new session
     try {
       const { data: newSession } = await supabase.from("webinar_sessions").select("starts_at, closer_id").eq("id", newSessionId).single();
@@ -1153,6 +1164,17 @@ async function handleRegistrations(method: string, segments: string[], req: Requ
     if (error) return json({ error: error.message }, 500);
 
     const roomUrl = `${FRONTEND_URL}/webinar/sala/${sessionId}?token=${reg.access_token}`;
+
+    // Apply Webinar label to pre-existing Pipedrive deal (best-effort)
+    try {
+      const existingDealId = extractDealId(data.pipedrive_deal_url as string | null);
+      if (existingDealId) {
+        const labelResult = await pipedriveAddWebinarLabel(existingDealId);
+        console.log(`[webinar-api] Webinar label on deal ${existingDealId}:`, labelResult);
+      }
+    } catch (err) {
+      console.error("[webinar-api] Failed to apply webinar label:", err);
+    }
 
     // Send confirmation email — best-effort (do not fail registration if email fails)
     try {
@@ -1466,6 +1488,36 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
     if ("no_show_at" in data) {
       updateData.no_show_at = data.no_show_at ? new Date().toISOString() : null;
     }
+
+    // Manual status transition: confirmado | presente | no_show | cancelado
+    // Derives attended_at / no_show_at / cancelled_at accordingly.
+    let statusTransition: "confirmado" | "presente" | "no_show" | "cancelado" | null = null;
+    if ("status" in data && typeof data.status === "string") {
+      const allowed = new Set(["confirmado", "presente", "no_show", "cancelado"]);
+      if (!allowed.has(data.status)) {
+        return json({ error: `Status inválido. Aceitos: ${[...allowed].join(", ")}` }, 400);
+      }
+      statusTransition = data.status as "confirmado" | "presente" | "no_show" | "cancelado";
+      const nowIso = new Date().toISOString();
+      if (statusTransition === "confirmado") {
+        updateData.attended_at = null;
+        updateData.no_show_at = null;
+        updateData.cancelled_at = null;
+      } else if (statusTransition === "presente") {
+        updateData.attended_at = nowIso;
+        updateData.no_show_at = null;
+        updateData.cancelled_at = null;
+      } else if (statusTransition === "no_show") {
+        updateData.no_show_at = nowIso;
+        updateData.attended_at = null;
+        updateData.cancelled_at = null;
+      } else if (statusTransition === "cancelado") {
+        updateData.cancelled_at = nowIso;
+        updateData.attended_at = null;
+        updateData.no_show_at = null;
+      }
+    }
+
     if (Object.keys(updateData).length === 0) return json({ error: "Nenhum campo para atualizar" }, 400);
 
     const { data: updated, error } = await supabase
@@ -1493,6 +1545,20 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
         pipedriveResults.no_show_move = noShowResult;
         console.log(`[webinar-api] Pipedrive move to No Show for deal ${dealId}:`, noShowResult);
       }
+      // Manual status transitions (skip if already handled above)
+      if (statusTransition === "presente" && !reg.attended_at) {
+        const moveResult = await pipedriveMoveDealToStage(dealId, SZS_STAGE_REUNIAO_REALIZADA);
+        pipedriveResults.status_move = { to: "presente", ...moveResult };
+        console.log(`[webinar-api] Pipedrive move to Reuniao Realizada for deal ${dealId}:`, moveResult);
+      } else if (statusTransition === "no_show" && !reg.no_show_at) {
+        const moveResult = await pipedriveMoveDealToStage(dealId, SZS_STAGE_NO_SHOW);
+        pipedriveResults.status_move = { to: "no_show", ...moveResult };
+        console.log(`[webinar-api] Pipedrive move to No Show for deal ${dealId}:`, moveResult);
+      } else if (statusTransition === "cancelado") {
+        const moveResult = await pipedriveMoveDealToStage(dealId, SZS_STAGE_NO_SHOW);
+        pipedriveResults.status_move = { to: "cancelado", ...moveResult };
+        console.log(`[webinar-api] Pipedrive move to No Show (cancelado) for deal ${dealId}:`, moveResult);
+      }
       // Create note if observacoes was set/changed and not empty
       if ("observacoes" in data && data.observacoes && data.observacoes !== reg.observacoes) {
         const now = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
@@ -1505,6 +1571,30 @@ async function handleAdmin(method: string, segments: string[], req: Request) {
     }
 
     return json({ ...updated, _pipedrive: pipedriveResults });
+  }
+
+  // POST /admin/backfill-webinar-label
+  // Applies Pipedrive label "Webinar" (id WEBINAR_LABEL_ID) to every registration's deal.
+  if (method === "POST" && segments[0] === "backfill-webinar-label") {
+    const { data: regs } = await supabase
+      .from("webinar_registrations")
+      .select("id, name, pipedrive_deal_url")
+      .not("pipedrive_deal_url", "is", null);
+
+    const results: { id: string; name: string; deal_id: number | null; ok: boolean; added?: boolean; error?: string }[] = [];
+    for (const r of (regs || []) as Record<string, unknown>[]) {
+      const dealId = extractDealId(r.pipedrive_deal_url as string | null);
+      if (!dealId) {
+        results.push({ id: r.id as string, name: r.name as string, deal_id: null, ok: false, error: "invalid deal url" });
+        continue;
+      }
+      const res = await pipedriveAddWebinarLabel(dealId);
+      results.push({ id: r.id as string, name: r.name as string, deal_id: dealId, ...res });
+    }
+    const added = results.filter(r => r.added).length;
+    const already = results.filter(r => r.ok && !r.added).length;
+    const failed = results.filter(r => !r.ok).length;
+    return json({ ok: true, total: results.length, added, already, failed, results });
   }
 
   // GET /admin/sessions/:id/registrations
@@ -2099,12 +2189,72 @@ const PIPEDRIVE_DOMAIN = "seazone-fd92b9";
 const SZS_PIPELINE_ID = 14;
 const SZS_STAGE_REUNIAO_REALIZADA = 151;
 const SZS_STAGE_NO_SHOW = 342;
+const WEBINAR_LABEL_ID = 1875;
 const PRE_SELLER_FIELD_KEY = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
 
 function extractDealId(dealUrl: string | null | undefined): number | null {
   if (!dealUrl) return null;
   const match = dealUrl.match(/\/deal\/(\d+)/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+async function pipedriveAddWebinarLabel(dealId: number): Promise<{ ok: boolean; added?: boolean; error?: string }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  try {
+    const dealResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`);
+    if (!dealResp.ok) return { ok: false, error: `Fetch deal failed: ${dealResp.status}` };
+    const dealData = await dealResp.json();
+    const currentLabel = dealData?.data?.label;
+    const currentIds = new Set(
+      typeof currentLabel === "string"
+        ? currentLabel.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : Array.isArray(currentLabel)
+          ? currentLabel.map(String)
+          : []
+    );
+    if (currentIds.has(String(WEBINAR_LABEL_ID))) {
+      return { ok: true, added: false };
+    }
+    currentIds.add(String(WEBINAR_LABEL_ID));
+    const newLabel = Array.from(currentIds).join(",");
+    const updateResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: newLabel }),
+    });
+    if (!updateResp.ok) {
+      return { ok: false, error: `Update label failed: ${updateResp.status} ${await updateResp.text()}` };
+    }
+    return { ok: true, added: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+async function pipedriveMoveDealToStage(dealId: number, stageId: number): Promise<{ ok: boolean; error?: string; moved?: boolean; pipeline_id?: number }> {
+  const token = Deno.env.get("PIPEDRIVE_API_TOKEN");
+  if (!token) return { ok: false, error: "PIPEDRIVE_API_TOKEN not set" };
+  try {
+    const dealResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`);
+    if (!dealResp.ok) return { ok: false, error: `Fetch deal failed: ${dealResp.status}` };
+    const dealData = await dealResp.json();
+    const pipelineId = dealData?.data?.pipeline_id;
+    if (pipelineId !== SZS_PIPELINE_ID) {
+      return { ok: true, moved: false, pipeline_id: pipelineId };
+    }
+    const updateResp = await fetch(`https://${PIPEDRIVE_DOMAIN}.pipedrive.com/api/v1/deals/${dealId}?api_token=${token}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage_id: stageId }),
+    });
+    if (!updateResp.ok) {
+      return { ok: false, error: `Update stage failed: ${updateResp.status} ${await updateResp.text()}` };
+    }
+    return { ok: true, moved: true, pipeline_id: pipelineId };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 async function pipedriveMoveDealStage(dealId: number): Promise<{ ok: boolean; error?: string; moved?: boolean; pipeline_id?: number }> {
@@ -2243,6 +2393,7 @@ async function pipedriveCreateWebinarDeal(
       pipeline_id: SZS_PIPELINE_ID,
       stage_id: SZS_STAGE_AGENDADO,
       status: "open",
+      label: String(WEBINAR_LABEL_ID),
     }),
   });
   if (!resp.ok) {

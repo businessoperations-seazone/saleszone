@@ -103,8 +103,13 @@ export const api = {
       request<Registration[]>(`/admin/sessions/${sessionId}/registrations`),
     getAllRegistrations: () =>
       request<Registration[]>("/admin/registrations"),
-    updateRegistration: (id: string, data: Partial<Registration>) =>
+    updateRegistration: (id: string, data: Partial<Registration> & { status?: "confirmado" | "presente" | "no_show" | "cancelado" }) =>
       request<Registration>(`/admin/registrations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    backfillWebinarLabel: () =>
+      request<{ ok: boolean; total: number; added: number; already: number; failed: number; results: { id: string; name: string; deal_id: number | null; ok: boolean; added?: boolean; error?: string }[] }>(
+        "/admin/backfill-webinar-label",
+        { method: "POST" }
+      ),
     syncTranscript: (id: string) =>
       request<{ ok: boolean; transcript_id?: string; transcript_title?: string; pipedrive?: { ok: boolean; note_id?: number; error?: string }; error?: string }>(
         `/admin/registrations/${id}/sync-transcript`,

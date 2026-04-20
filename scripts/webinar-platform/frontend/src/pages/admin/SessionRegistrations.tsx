@@ -76,6 +76,7 @@ function formatDateTime(iso: string) {
 }
 
 type RegStatus = "Confirmado" | "Presente" | "Convertido" | "Cancelado" | "No Show";
+type StatusKey = "confirmado" | "presente" | "no_show" | "cancelado";
 
 function getRegStatus(reg: Registration): RegStatus {
   if (reg.cancelled_at) return "Cancelado";
@@ -83,6 +84,13 @@ function getRegStatus(reg: Registration): RegStatus {
   if (reg.converted) return "Convertido";
   if (reg.attended_at) return "Presente";
   return "Confirmado";
+}
+
+function statusToKey(status: RegStatus): StatusKey {
+  if (status === "Cancelado") return "cancelado";
+  if (status === "No Show") return "no_show";
+  if (status === "Presente" || status === "Convertido") return "presente";
+  return "confirmado";
 }
 
 function StatusBadge({ reg }: { reg: Registration }) {
@@ -144,8 +152,8 @@ export default function SessionRegistrations() {
   const [savingObs, setSavingObs] = useState<string | null>(null);
   const [savingOpp, setSavingOpp] = useState<string | null>(null);
   const [syncingTranscript, setSyncingTranscript] = useState<string | null>(null);
-  const [markingNoShow, setMarkingNoShow] = useState<string | null>(null);
   const [markingNoShows, setMarkingNoShows] = useState(false);
+  const [changingStatus, setChangingStatus] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -228,26 +236,30 @@ export default function SessionRegistrations() {
     }
   }
 
-  async function handleMarkNoShow(regId: string) {
-    if (!confirm("Marcar como Não Compareceu e mover o deal para No Show no Pipedrive?")) return;
-    setMarkingNoShow(regId);
+  async function handleChangeStatus(regId: string, status: StatusKey) {
+    const confirmMsgs: Record<StatusKey, string> = {
+      confirmado: "Voltar para Confirmado? Limpa presente/no show/cancelado.",
+      presente: "Marcar como Presente? Move deal para 'Reunião Realizada' no Pipedrive.",
+      no_show: "Marcar como No Show? Move deal para 'No Show' no Pipedrive.",
+      cancelado: "Cancelar inscrição? Move deal para 'No Show' no Pipedrive.",
+    };
+    if (!confirm(confirmMsgs[status])) return;
+    setChangingStatus(regId);
     setError(null);
     try {
-      const result = await api.admin.updateRegistration(regId, { no_show_at: true }) as Registration & { _pipedrive?: { no_show_move?: { ok: boolean; moved?: boolean; pipeline_id?: number; error?: string } } };
+      const updated = await api.admin.updateRegistration(regId, { status }) as Registration & { _pipedrive?: { status_move?: { to: string; ok: boolean; moved?: boolean; error?: string } } };
       setData((prev) => prev ? {
         ...prev,
-        registrations: prev.registrations.map((r) => r.id === regId ? { ...r, no_show_at: new Date().toISOString() } : r),
+        registrations: prev.registrations.map((r) => r.id === regId ? { ...r, ...updated } : r),
       } : prev);
-      const pd = result._pipedrive?.no_show_move;
-      if (pd?.moved) {
-        alert("Deal movido para 'No Show' no Pipedrive.");
-      } else if (pd && !pd.ok) {
-        alert(`Marcado como No Show, mas erro no Pipedrive: ${pd.error}`);
+      const pd = updated._pipedrive?.status_move;
+      if (pd && !pd.ok) {
+        alert(`Status alterado, mas erro no Pipedrive: ${pd.error}`);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Erro ao marcar No Show");
+      setError(e instanceof Error ? e.message : "Erro ao alterar status");
     } finally {
-      setMarkingNoShow(null);
+      setChangingStatus(null);
     }
   }
 
@@ -564,18 +576,20 @@ export default function SessionRegistrations() {
                         {formatDateTime(reg.created_at)}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                           <StatusBadge reg={reg} />
-                          {getRegStatus(reg) === "Confirmado" && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleMarkNoShow(reg.id); }}
-                              disabled={markingNoShow === reg.id}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-white border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                              title="Marcar como Não Compareceu (move deal para No Show no Pipedrive)"
-                            >
-                              {markingNoShow === reg.id ? "..." : "Não compareceu"}
-                            </button>
-                          )}
+                          <select
+                            value={statusToKey(getRegStatus(reg))}
+                            disabled={changingStatus === reg.id}
+                            onChange={(e) => handleChangeStatus(reg.id, e.target.value as StatusKey)}
+                            className="text-xs border border-gray-200 rounded-md px-1.5 py-0.5 bg-white disabled:opacity-50"
+                            title="Alterar status manualmente"
+                          >
+                            <option value="confirmado">Confirmado</option>
+                            <option value="presente">Presente</option>
+                            <option value="no_show">No Show</option>
+                            <option value="cancelado">Cancelado</option>
+                          </select>
                         </div>
                       </td>
                     </tr>
