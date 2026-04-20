@@ -10,13 +10,14 @@ const V_COLS = mc.closers;
 
 export const dynamic = "force-dynamic";
 
+// Pipeline 44: 12 stages (inspect-stages confirmed)
 const STAGE_NAMES: Record<number, string> = {
-  1: "FUP Parceiro", 2: "Lead in", 3: "Contatados", 4: "Qualificação", 5: "Qualificado",
-  6: "Aguardando data", 7: "Agendado", 8: "No Show/Reagendamento", 9: "Reunião/OPP",
-  10: "FUP", 11: "Negociação", 12: "Fila de espera", 13: "Reservas", 14: "Contrato",
+  1: "Lead in", 2: "Contatados", 3: "Qualificação", 4: "Qualificado",
+  5: "Aguardando data", 6: "Agendado", 7: "No show", 8: "Reunião Realizada",
+  9: "FUP", 10: "Negociação", 11: "Ag. Dados", 12: "Contrato",
 };
 
-const ALL_STAGES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const ALL_STAGES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
 function getSquadId(closerName: string): number {
   for (const [sqId, indices] of Object.entries(mc.squadCloserMap)) {

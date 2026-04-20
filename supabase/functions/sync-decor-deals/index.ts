@@ -19,7 +19,7 @@ const FIELD_REUNIAO = "bfafc352c5c6f2edbaa41bf6d1c6daa825fc9c16";
 const FIELD_RD_SOURCE = "ff53f6910138fa1d8969b686acb4b1336d50c9bd";
 const FIELD_PRESELLER = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
 
-const OPP_MIN_ORDER = 9; // stage_order >= 9 = OPP (Reunião/OPP)
+const OPP_MIN_ORDER = 8; // stage_order >= 8 = OPP (Reunião Realizada, stage ID 355)
 
 // Stages discovered from Pipedrive on first use; auto-populated by ensureStages()
 // Stage names for pipeline 44 (Decor):

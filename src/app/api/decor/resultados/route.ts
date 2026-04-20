@@ -18,12 +18,15 @@ function getCanalGroup(canalId: string): "Vendas Diretas" | "Parcerias" {
   return PARCERIA_CANAL_IDS.has(canalId) ? "Parcerias" : "Vendas Diretas";
 }
 
-/* ── Stage thresholds (pipeline 44 — 14 stages) ──────────────── */
-// MQL=add_time, SQL=qualificacao_date, OPP=reuniao_date, WON=won_time
-// Reservas = max_stage_order >= 13, Contrato = max_stage_order >= 14
-const OPP_MIN_ORDER = 9;
-const RESERVA_MIN_ORDER = 13;
-const CONTRATO_MIN_ORDER = 14;
+/* ── Stage thresholds (pipeline 44 — 12 stages) ──────────────── */
+// 348:Lead in(1) 349:Contatados(2) 350:Qualificação(3) 351:Qualificado(4)
+// 352:Ag.data(5) 353:Agendado(6) 354:No show(7) 355:Reunião Realizada(8)
+// 358:FUP(9) 357:Negociação(10) 356:Aguardando Dados(11) 359:Contrato(12)
+const OPP_MIN_ORDER = 8;      // Reunião Realizada
+const RESERVA_MIN_ORDER = 11; // Aguardando Dados
+const CONTRATO_MIN_ORDER = 12; // Contrato
+const STAGE_ID_AG_DADOS = 356; // Aguardando Dados — snapshot
+const STAGE_ID_CONTRATO = 359; // Contrato — snapshot
 
 /* ── Metas ────────────────────────────────────────────────────── */
 interface ChannelMetas {
@@ -237,16 +240,17 @@ export async function GET() {
         if (mso >= CONTRATO_MIN_ORDER) { funnelContrato[group]++; funnelContrato.Geral++; }
       }
 
-      // Snapshots: open deals currently in Reservas or Contrato stage
-      const openDeals = await paginate((o, ps) =>
-        admin.from("decor_deals").select("canal, max_stage_order")
-          .eq("status", "open").gte("max_stage_order", RESERVA_MIN_ORDER).range(o, o + ps - 1)
+      // Snapshots: open deals CURRENTLY in Ag. Dados (356) or Contrato (359) stage
+      const snapshotDeals = await paginate((o, ps) =>
+        admin.from("decor_deals").select("canal, stage_id")
+          .eq("status", "open")
+          .in("stage_id", [STAGE_ID_AG_DADOS, STAGE_ID_CONTRATO])
+          .range(o, o + ps - 1)
       );
-      for (const d of openDeals) {
+      for (const d of snapshotDeals) {
         const group = getCanalGroup(String(d.canal || ""));
-        const mso = d.max_stage_order || 0;
-        if (mso >= RESERVA_MIN_ORDER) { snapshots[group].reserva++; snapshots.Geral.reserva++; }
-        if (mso >= CONTRATO_MIN_ORDER) { snapshots[group].contrato++; snapshots.Geral.contrato++; }
+        if (d.stage_id === STAGE_ID_AG_DADOS) { snapshots[group].reserva++; snapshots.Geral.reserva++; }
+        else if (d.stage_id === STAGE_ID_CONTRATO) { snapshots[group].contrato++; snapshots.Geral.contrato++; }
       }
 
       // History: cumulative open deals last 90 days
