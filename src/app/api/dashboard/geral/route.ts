@@ -383,7 +383,7 @@ export async function GET(req: NextRequest) {
 
       // Stage bucket stock: cumulative counts (deals in stage X also count in all lower stages)
       // MQL = stage_order >= 1, SQL >= 5, OPP >= 9, Reserva >= 13, Contrato >= 14
-      const so = (d as any).stage_order ?? 0;
+      const so = (d as { stage_order?: number }).stage_order ?? 0;
 
       if (d.status === "open") {
         for (let i = addIdx; i < N; i++) {
@@ -436,7 +436,7 @@ export async function GET(req: NextRequest) {
     for (const d of histDeals) {
       if (d.status !== "open") continue;
       if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = (d as any).max_stage_order ?? (d as any).stage_order ?? 0;
+      const mso = (d as { max_stage_order?: number; stage_order?: number }).max_stage_order ?? (d as { stage_order?: number }).stage_order ?? 0;
       if (mso < TH_MQL) continue;
       const macro = getMacroChannel(d.canal);
       openByChannel["Geral"]++;
@@ -553,7 +553,7 @@ export async function GET(req: NextRequest) {
         )
       : [];
     const noShowTotal = noShowRows.length;
-    const noShowCanceladas = noShowRows.filter((e: any) => e.cancelou).length;
+    const noShowCanceladas = noShowRows.filter((e: { cancelou: boolean | null }) => e.cancelou).length;
     const noShowPct = noShowTotal > 0 ? Math.round((noShowCanceladas / noShowTotal) * 1000) / 10 : 0;
 
     // ── Build channels ──

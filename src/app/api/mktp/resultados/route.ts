@@ -141,6 +141,7 @@ export async function GET() {
     );
 
     // Merge, dedup by deal_id
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const dealMap = new Map<number, any>();
     for (const d of allDeals) dealMap.set(d.deal_id, d);
     for (const d of wonDeals) dealMap.set(d.deal_id, d);
@@ -348,8 +349,8 @@ export async function GET() {
         .range(o, o + ps - 1)
     );
 
-    let noShowTotal = noShowRows.length;
-    let noShowCanceladas = noShowRows.filter((e: any) => e.cancelou).length;
+    const noShowTotal = noShowRows.length;
+    const noShowCanceladas = noShowRows.filter((e: { cancelou: boolean | null }) => e.cancelou).length;
     const noShowPct = noShowTotal > 0 ? Math.round((noShowCanceladas / noShowTotal) * 1000) / 10 : 0;
 
     /* ── 6. History — cumulative open deals from mktp_deals (delta approach) ── */
@@ -393,7 +394,7 @@ export async function GET() {
       const mso = d.max_stage_order || 0;
       const group = getCanalGroup(String(d.canal || ""));
 
-      let addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
+      const addIdx = dateIndexMap.get(addDay) ?? (addDay < allHistDates[0] ? 0 : -1);
       if (addIdx < 0) continue;
 
       let closeIdx: number | null = null;
