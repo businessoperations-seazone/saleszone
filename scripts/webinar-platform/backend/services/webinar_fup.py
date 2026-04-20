@@ -4,6 +4,8 @@
 Orquestra: decisão de disparo → formatação → Timelines → Slack → dedup.
 """
 from datetime import datetime, timezone
+from config import FUP_ALLOWED_CLOSER_SLUG, DRY_RUN_FUP
+from services import timelines, slack_notifier
 
 MESSAGE_TEMPLATE = """Oi{saudacao}aqui é a Mayara da Seazone!
 
@@ -74,3 +76,78 @@ def get_closer_slug(session_id):
     if not closers:
         return None
     return closers[0].get("slug")
+
+
+def handle_patch_update(previous, updated, session_id):
+    """Orquestra o FUP automático após PATCH de registration no admin.
+
+    Chamado pelo handler de rota. Nunca propaga exceções — best-effort.
+    """
+    if not should_send_fup(previous, updated):
+        return
+
+    closer_slug = get_closer_slug(session_id)
+    if closer_slug != FUP_ALLOWED_CLOSER_SLUG:
+        print(f"[webinar-fup] skip reg={updated.get('id')} — closer {closer_slug!r} ≠ whitelist {FUP_ALLOWED_CLOSER_SLUG!r}")
+        return
+
+    message = format_message(updated)
+
+    if DRY_RUN_FUP:
+        preview = (
+            f"[DRY RUN] FUP webinar não enviado\n"
+            f"• reg_id: {updated.get('id')}\n"
+            f"• nome: {updated.get('name')}\n"
+            f"• phone: {updated.get('phone')}\n"
+            f"• deal_id: {updated.get('pipedrive_deal_id')}\n"
+            f"• mensagem:\n```\n{message}\n```"
+        )
+        slack_notifier.post_message(
+            channel=_slack_channel(),
+            text=preview,
+        )
+        print(f"[webinar-fup] DRY RUN reg={updated.get('id')}")
+        return
+
+    chat_id = timelines.find_chat_id(updated.get("phone"))
+    if not chat_id:
+        slack_notifier.post_message(
+            channel=_slack_channel(),
+            text=f"FUP webinar FALHOU — chat Timelines não encontrado\nreg={updated.get('id')} phone={updated.get('phone')}",
+        )
+        return
+
+    result = timelines.send_message(chat_id=chat_id, text=message)
+    if result is None:
+        slack_notifier.post_message(
+            channel=_slack_channel(),
+            text=f"FUP webinar FALHOU no envio Timelines\nreg={updated.get('id')} chat_id={chat_id}",
+        )
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        db.update(
+            "webinar_registrations",
+            {"id": f"eq.{updated['id']}"},
+            {"fup_sent_at": now_iso},
+        )
+    except Exception as e:
+        print(f"[webinar-fup] dedup update failed: {e}")
+
+    slack_notifier.post_message(
+        channel=_slack_channel(),
+        text=(
+            f"FUP webinar enviado ✓\n"
+            f"• reg_id: {updated.get('id')}\n"
+            f"• nome: {updated.get('name')}\n"
+            f"• phone: {updated.get('phone')}\n"
+            f"• chat_id: {chat_id}\n"
+            f"• deal_id: {updated.get('pipedrive_deal_id')}"
+        ),
+    )
+
+
+def _slack_channel():
+    from config import SLACK_FUP_DM_CHANNEL
+    return SLACK_FUP_DM_CHANNEL
