@@ -96,7 +96,7 @@ async function fallbackFromPipedrive(
   const wonByGroup = zero();
   const prevWonByGroup = zero();
 
-  // Open deals
+  // Open deals from pipeline 44
   let start = 0;
   while (true) {
     const res = await pipeFetch(token, `/pipelines/${PIPELINE_ID}/deals`, {
@@ -113,28 +113,30 @@ async function fallbackFromPipedrive(
     start += 500;
   }
 
-  // Won deals (current + prev month)
+  // Won deals sorted by won_time DESC — stop once we go past prevStart (date-based early exit)
+  // This avoids the "pages without match" problem when pipeline 44 deals are sparse across pages.
   start = 0;
-  let pagesWithoutMatch = 0;
-  while (pagesWithoutMatch < 3) {
+  let stopFetch = false;
+  while (!stopFetch) {
     const res = await pipeFetch(token, "/deals", {
-      status: "won", limit: "500", start: String(start), everyone: "1",
+      status: "won", limit: "500", start: String(start),
+      sort: "won_time DESC", everyone: "1",
     });
     if (!res.data || res.data.length === 0) break;
-    let pageHadMatch = false;
     for (const deal of res.data) {
-      if (deal.pipeline_id !== PIPELINE_ID) continue;
       const wonTime = deal.won_time?.substring(0, 10) || "";
+      // Once won_time is older than prev month start, no more relevant deals
+      if (wonTime < prevStart) { stopFetch = true; break; }
+      if (deal.pipeline_id !== PIPELINE_ID) continue;
       const group = getCanalGroup(String(deal[FIELD_CANAL] || ""));
       if (wonTime >= monthStart) {
-        wonByGroup[group]++; wonByGroup.Geral++; pageHadMatch = true;
+        wonByGroup[group]++; wonByGroup.Geral++;
       } else if (wonTime >= prevStart && wonTime <= prevEnd) {
-        prevWonByGroup[group]++; prevWonByGroup.Geral++; pageHadMatch = true;
+        prevWonByGroup[group]++; prevWonByGroup.Geral++;
       }
     }
     if (!res.additional_data?.pagination?.more_items_in_collection) break;
     start += 500;
-    pagesWithoutMatch = pageHadMatch ? 0 : pagesWithoutMatch + 1;
   }
 
   return { openByGroup, wonByGroup, prevWonByGroup };
@@ -309,7 +311,8 @@ export async function GET() {
       );
 
       for (const ch of CHANNEL_ORDER) {
-        channelCounts[ch].mql = openByGroup[ch] + wonByGroup[ch];
+        // Fallback: only WON is reliable from Pipedrive live.
+        // MQL/SQL/OPP require decor_deals (date columns) — show 0 until sync runs.
         channelCounts[ch].won = wonByGroup[ch];
         prevWonMap[ch] = prevWonByGroup[ch];
       }
