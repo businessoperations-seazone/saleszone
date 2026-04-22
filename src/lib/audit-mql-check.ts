@@ -39,6 +39,12 @@ function sanitizeError(err: unknown): string {
     .slice(0, 500)
 }
 
+// Reseta notified ao transitar de categoria — garante novo alerta no Slack
+function setStatus(lead: LeadRecord, next: LeadRecord["status"]) {
+  if (lead.status !== next) lead.notified = false
+  lead.status = next
+}
+
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
 
 // TODO: extrair pdFetch, findPerson, getLatestDeal, parseMiaMotivo,
@@ -586,7 +592,7 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
       const personId = await findPerson(lead.email, lead.phone)
       if (!personId) {
-        lead.status = "sem_pipedrive"
+        setStatus(lead, "sem_pipedrive")
         await notify(lead, key, "sem_pipedrive")
         lead.notified = true
         return { resolved: false }
@@ -594,7 +600,7 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
       const deal = await getLatestDeal(personId)
       if (!deal) {
-        lead.status = "sem_pipedrive"
+        setStatus(lead, "sem_pipedrive")
         await notify(lead, key, "sem_pipedrive")
         lead.notified = true
         return { resolved: false }
@@ -602,7 +608,7 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
       lead.pipedrive_deal_id = deal.deal_id
       if (!deal.mia_link) {
-        lead.status = "sem_mia"
+        setStatus(lead, "sem_mia")
         // Pre-fetch do erro MIA da Note do Pipedrive. Assim o card já mostra
         // motivo parseado sem o usuário precisar entrar no Pipedrive.
         // Busca só quando mia_error ainda não foi capturado ou é antigo (>1h).
