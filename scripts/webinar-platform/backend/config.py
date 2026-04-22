@@ -21,11 +21,5 @@ SMTP_FROM = os.environ.get("SMTP_FROM", "webinar@seazone.com.br")
 PIPEDRIVE_API_TOKEN = os.environ.get("PIPEDRIVE_API_TOKEN", "")
 PIPEDRIVE_DOMAIN = "seazone-fd92b9"
 MORADA_API_KEY = os.environ.get("MORADA_API_KEY", "")
-TIMELINES_API_TOKEN = os.environ.get("TIMELINES_API_TOKEN", "")
-TIMELINES_WA_ACCOUNT = os.environ.get("TIMELINES_WA_ACCOUNT", "")  # ex: ca_xxxxx
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
-SLACK_FUP_DM_CHANNEL = os.environ.get("SLACK_FUP_DM_CHANNEL", "D07M0MKUJUS")  # JP DM
-FUP_ALLOWED_CLOSER_SLUG = os.environ.get("FUP_ALLOWED_CLOSER_SLUG", "mayara-marques")
-DRY_RUN_FUP = os.environ.get("DRY_RUN_FUP", "true").lower() == "true"
 FLASK_PORT = int(os.environ.get("FLASK_PORT", "5060"))
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(",")
