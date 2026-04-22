@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import Link from "next/link"
 import { ShieldAlert, CheckCircle2, XCircle, Clock, ChevronLeft, ChevronRight, RefreshCw, AlertTriangle, ChevronDown } from "lucide-react"
 import type { LeadRecord } from "@/lib/audit-mql"
+import LandingPageTab from "./LandingPageTab"
 
 type SlaRow = { id: number; vertical: string; nome: string; status: boolean; mql_intencoes: string[]; mql_faixas: string[]; mql_pagamentos: string[] }
 type SlaData = { rows: SlaRow[] }
@@ -345,7 +346,7 @@ interface LogEntry {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function AuditMQL() {
-  const [tab, setTab]               = useState<"leads" | "log" | "sobre">("leads")
+  const [tab, setTab]               = useState<"lead-ads" | "landing-page" | "log" | "sobre">("lead-ads")
   const [range, setRange]           = useState<DateRange>({ start: todayKey(), end: todayKey() })
   const [leads, setLeads]           = useState<LeadRecord[]>([])
   const [loading, setLoading]       = useState(true)
@@ -586,28 +587,18 @@ export default function AuditMQL() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ShieldAlert size={22} color={T.destructive} />
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Audit MQL</h1>
-          <nav style={{ display: "flex", gap: 6, marginLeft: 16 }}>
-            <span style={{
-              padding: "4px 10px", fontSize: 12, fontWeight: 600,
-              color: T.bg, background: T.primary, borderRadius: 6,
-            }}>Meta Ads</span>
-            <Link href="/growth/audit-lp" style={{
-              padding: "4px 10px", fontSize: 12, textDecoration: "none",
-              color: T.mutedFg, border: `1px solid ${T.border}`, borderRadius: 6,
-            }}>Landing Pages</Link>
-          </nav>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {lastUpdate && !loading && tab === "leads" && (
+          {lastUpdate && !loading && tab === "lead-ads" && (
             <span style={{ fontSize: 12, color: T.mutedFg }}>{fmtTime(lastUpdate.toISOString())}</span>
           )}
-          <button onClick={() => tab === "leads" ? fetchLeads(range) : fetchLog()}
+          <button onClick={() => tab === "lead-ads" ? fetchLeads(range) : fetchLog()}
             style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6,
               padding: "5px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
               fontSize: 12, color: T.mutedFg }}>
             <RefreshCw size={13} />
           </button>
-          {tab === "leads" && (
+          {tab === "lead-ads" && (
             <button onClick={runRecovery} disabled={recovering}
               title="Busca leads direto na Meta API e salva os que estão faltando"
               style={{ background: recovering ? T.muted : "none",
@@ -619,22 +610,25 @@ export default function AuditMQL() {
               {recovering ? "Recuperando…" : recoveryMsg || "Recuperar leads"}
             </button>
           )}
-          {tab === "leads" && <DatePicker value={range} onChange={r => { setRange(r); setVerticalFilter(null) }} />}
+          {tab === "lead-ads" && <DatePicker value={range} onChange={r => { setRange(r); setVerticalFilter(null) }} />}
         </div>
       </div>
 
       {/* Abas */}
       <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: `1px solid ${T.border}` }}>
-        {(["leads", "log", "sobre"] as const).map(t => (
+        {(["lead-ads", "landing-page", "log", "sobre"] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
             padding: "8px 20px", border: "none", background: "none", cursor: "pointer",
             fontSize: 13, fontWeight: tab === t ? 700 : 400,
             color: tab === t ? T.primary : T.mutedFg,
             borderBottom: tab === t ? `2px solid ${T.primary}` : "2px solid transparent",
             marginBottom: -1,
-          }}>{t === "leads" ? "Leads" : t === "log" ? "Log Diário" : "Sobre"}</button>
+          }}>{t === "lead-ads" ? "Lead Ads" : t === "landing-page" ? "Landing Page" : t === "log" ? "Log Diário" : "Sobre"}</button>
         ))}
       </div>
+
+      {/* ── ABA LANDING PAGE ───────────────────────────────────────────────── */}
+      {tab === "landing-page" && <LandingPageTab />}
 
       {/* ── ABA LOG ─────────────────────────────────────────────────────────── */}
       {tab === "log" && (
@@ -733,7 +727,7 @@ export default function AuditMQL() {
       )}
 
       {/* ── ABA LEADS ────────────────────────────────────────────────────────── */}
-      {tab === "leads" && <>
+      {tab === "lead-ads" && <>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 10, marginBottom: 16 }}>
           {([
             { label: "Leads",         value: total,      color: T.fg,          status: null,            desc: "Total de leads no dia" },
