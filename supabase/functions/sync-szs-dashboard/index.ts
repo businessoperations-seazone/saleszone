@@ -90,6 +90,7 @@ function parseCSVLine(line: string): string[] {
 // ---- Constants ----
 const PIPELINE_ID = 14;
 
+
 // Canal group mapping: maps Nekt canal NAME to display group
 const CANAL_GROUPS: Record<string, string> = {
   "Marketing": "Marketing",
@@ -159,10 +160,11 @@ function getCanalGroup(deal: NektDeal): string {
 }
 
 function getCidade(deal: NektDeal): string {
-  const cidade = deal.cidade_do_imovel;
+  const cidade = deal.cidade_onde_fica_o_imovel;
   if (!cidade || cidade === "-") return "Sem cidade";
   return cidade.trim();
 }
+
 
 function getBairro(deal: NektDeal): string {
   const val = deal.bairro_do_imovel;
@@ -275,7 +277,7 @@ async function writeStageCounts(svcKey: string, stageCounts: Record<"reserva" | 
 
 // ---- Nekt SQL column list for deals ----
 const NEKT_DEAL_COLUMNS = `id, pipeline_id, status, etapa, canal, empreendimento,
-    cidade_do_imovel, bairro_do_imovel, negocio_criado_em, ganho_em, data_de_perda,
+    cidade_onde_fica_o_imovel, bairro_do_imovel, negocio_criado_em, ganho_em, data_de_perda,
     data_de_qualificacao, data_da_reuniao, owner_id, deal_owner_name, motivo_da_perda, titulo`;
 
 // ---- Mode: daily-open (Nekt query, replaces counts) ----
