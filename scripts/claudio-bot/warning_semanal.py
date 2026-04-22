@@ -9,7 +9,7 @@ Dois modos:
 Uso:
     python3 warning_semanal.py --now --dia sexta
     python3 warning_semanal.py --now --dia diario
-    python3 warning_semanal.py --now --dia sexta --test        # envia para DM JP
+    python3 warning_semanal.py --now --dia sexta --test        # envia para #supervisor-claudio
     python3 warning_semanal.py --now --dia sexta --dry-run
 """
 
@@ -30,6 +30,7 @@ from config import (
     MAX_MESSAGE_CHARS,
     SLACK_DELAY_SECONDS,
     PIPEDRIVE_PAGE_LIMIT,
+    TEST_CHANNEL,
 )
 from claudio import (
     pipedrive_get,
@@ -54,9 +55,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("warning-semanal")
 
-
-# ── Canal de teste (DM do JP com bot Claudio) ──
-DM_JP_CHANNEL = "D0AKXC8AJP3"
 
 PIPELINE_KEY_BY_ID = {p["id"]: key for key, p in PIPELINES.items()}
 
@@ -327,7 +325,7 @@ def run_sexta(today, dry_run=False, test_mode=False):
 
     for pipeline_key, deals in by_pipeline.items():
         classified = classify_by_role(deals, pipeline_key, inactive_user_ids=inactive_ids)
-        channel = DM_JP_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
+        channel = TEST_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
         totals = _send_pipeline_block(pipeline_key, classified, channel, "losts_semana", dry_run)
         log.info("Pipeline %s losts_semana: %s", pipeline_key, totals)
 
@@ -356,7 +354,7 @@ def run_diario(today, dry_run=False, test_mode=False):
 
     for pipeline_key, deals in by_pipeline.items():
         classified = classify_by_role(deals, pipeline_key, inactive_user_ids=inactive_ids)
-        channel = DM_JP_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
+        channel = TEST_CHANNEL if test_mode else PIPELINES[pipeline_key]["channel"]
         totals = _send_pipeline_block(pipeline_key, classified, channel, "reativacao", dry_run)
         log.info("Pipeline %s reativacao: %s", pipeline_key, totals)
 
@@ -369,7 +367,7 @@ def main():
         print("Uso: python3 warning_semanal.py --now --dia sexta|diario [--test] [--dry-run]")
         print("  --dia sexta     Losts da semana sem atividade futura (sexta-feira)")
         print("  --dia diario    Deals lost com atividade para HOJE (seg-sex)")
-        print("  --test          Envia para DM do JP")
+        print("  --test          Envia para #supervisor-claudio")
         print("  --dry-run       Apenas loga")
         sys.exit(0)
     dry_run = "--dry-run" in args
