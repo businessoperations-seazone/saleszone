@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import SchedulePage from "./pages/SchedulePage";
-import ExternalSchedulePage from "./pages/ExternalSchedulePage";
 import WaitingRoom from "./pages/WaitingRoom";
 import LiveRoom from "./pages/LiveRoom";
 import ThankYou from "./pages/ThankYou";
@@ -11,13 +10,11 @@ import SlotsPage from "./pages/admin/SlotsPage";
 import SessionsPage from "./pages/admin/SessionsPage";
 import LiveControl from "./pages/admin/LiveControl";
 import RegistrationsPage from "./pages/admin/RegistrationsPage";
-import SessionRegistrations from "./pages/admin/SessionRegistrations";
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/agendar/:closerSlug" element={<ExternalSchedulePage />} />
         <Route path="/:closerSlug" element={<SchedulePage />} />
         <Route path="/webinar/sala/:sessionId" element={<WaitingRoom />} />
         <Route path="/webinar/sala/:sessionId/live" element={<LiveRoom />} />
@@ -28,7 +25,6 @@ export default function App() {
           <Route path="slots" element={<SlotsPage />} />
           <Route path="sessoes" element={<SessionsPage />} />
           <Route path="sessoes/:sessionId/live" element={<LiveControl />} />
-          <Route path="sessoes/:sessionId/inscritos" element={<SessionRegistrations />} />
           <Route path="inscricoes" element={<RegistrationsPage />} />
         </Route>
       </Routes>

@@ -114,8 +114,7 @@ export default function Calendar({ selectedDate, onSelectDate }: CalendarProps) 
           } else if (isSelected) {
             cellClass += "bg-blue-500 text-white font-semibold";
           } else if (isToday) {
-            // subtle marker for today: outlined ring, not filled
-            cellClass += "text-blue-600 font-semibold ring-1 ring-blue-300 hover:bg-blue-50";
+            cellClass += "bg-gray-800 text-white font-semibold hover:bg-gray-700";
           } else {
             cellClass += "text-gray-700 hover:bg-blue-50";
           }

@@ -1,1 +1,0 @@
-# Sem dependencias pip — usa stdlib + claude CLI

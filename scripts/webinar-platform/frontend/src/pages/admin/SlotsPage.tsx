@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
+import { useOutletContext } from "react-router-dom";
 import type { Slot, Closer } from "../../lib/types";
 import { api } from "../../lib/api";
 
-const DAY_NAMES = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
-
-function formatSlotTime(time: string): string {
-  // time comes as "09:00:00+00" (UTC) — just show HH:MM
-  return time.slice(0, 5);
+interface AdminContext {
+  token: string;
 }
+
+const DAY_NAMES = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 const EMPTY_FORM: Partial<Slot> & { closer_id?: string } = {
   day_of_week: 1,
@@ -20,6 +20,7 @@ const EMPTY_FORM: Partial<Slot> & { closer_id?: string } = {
 };
 
 export default function SlotsPage() {
+  const { token } = useOutletContext<AdminContext>();
   const [slots, setSlots] = useState<Slot[]>([]);
   const [closers, setClosers] = useState<Closer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,13 +29,12 @@ export default function SlotsPage() {
   const [form, setForm] = useState<Partial<Slot> & { closer_id?: string }>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
     try {
       const [slotsData, closersData] = await Promise.all([
-        api.admin.getSlots(),
+        api.admin.getSlots(token),
         api.admin.getClosers(),
       ]);
       setSlots(slotsData);
@@ -47,8 +47,8 @@ export default function SlotsPage() {
   }
 
   useEffect(() => {
-    load();
-  }, []);
+    if (token) load();
+  }, [token]);
 
   function startNew() {
     setEditingId(null);
@@ -80,10 +80,10 @@ export default function SlotsPage() {
     setSaving(true);
     try {
       if (editingId) {
-        const updated = await api.admin.updateSlot(editingId, form);
+        const updated = await api.admin.updateSlot(token, editingId, form);
         setSlots((prev) => prev.map((s) => (s.id === editingId ? updated : s)));
       } else {
-        const created = await api.admin.createSlot(form);
+        const created = await api.admin.createSlot(token, form);
         setSlots((prev) => [...prev, created]);
       }
       cancelForm();
@@ -97,7 +97,7 @@ export default function SlotsPage() {
   async function handleDelete(id: string) {
     if (!confirm("Tem certeza que deseja excluir este horário?")) return;
     try {
-      await api.admin.deleteSlot(id);
+      await api.admin.deleteSlot(token, id);
       setSlots((prev) => prev.filter((s) => s.id !== id));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao excluir horário");
@@ -105,16 +105,11 @@ export default function SlotsPage() {
   }
 
   async function handleToggleActive(slot: Slot) {
-    if (togglingId) return;
-    setTogglingId(slot.id);
-    setError(null);
     try {
-      const updated = await api.admin.updateSlot(slot.id, { is_active: !slot.is_active });
+      const updated = await api.admin.updateSlot(token, slot.id, { is_active: !slot.is_active });
       setSlots((prev) => prev.map((s) => (s.id === slot.id ? updated : s)));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao atualizar horário");
-    } finally {
-      setTogglingId(null);
     }
   }
 
@@ -262,7 +257,7 @@ export default function SlotsPage() {
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Dia</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Horário</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Duração</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Máx.</th>
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Máx. Part.</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Apresentador</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Ativo</th>
                 <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Ações</th>
@@ -272,24 +267,22 @@ export default function SlotsPage() {
               {slots.map((slot) => (
                 <tr key={slot.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{DAY_NAMES[slot.day_of_week]}</td>
-                  <td className="px-4 py-3 text-gray-700">{formatSlotTime(slot.time)}</td>
+                  <td className="px-4 py-3 text-gray-700">{slot.time}</td>
                   <td className="px-4 py-3 text-gray-600">{slot.duration_minutes} min</td>
                   <td className="px-4 py-3 text-gray-600">{slot.max_participants}</td>
-                  <td className="px-4 py-3 text-gray-600 max-w-[180px] truncate text-xs">{slot.presenter_email}</td>
+                  <td className="px-4 py-3 text-gray-600 max-w-[180px] truncate">{slot.presenter_email}</td>
                   <td className="px-4 py-3">
                     <button
-                      type="button"
                       onClick={() => handleToggleActive(slot)}
-                      disabled={togglingId === slot.id}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-1 ${
-                        togglingId === slot.id
-                          ? "opacity-50 cursor-wait"
-                          : "cursor-pointer"
-                      } ${slot.is_active ? "bg-blue-600" : "bg-gray-300"}`}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                        slot.is_active ? "bg-blue-600" : "bg-gray-300"
+                      }`}
                     >
                       <span
-                        className="inline-block h-4 w-4 rounded-full bg-white shadow transition-transform"
-                        style={{ transform: slot.is_active ? "translateX(22px)" : "translateX(3px)" }}
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                          slot.is_active ? "translate-x-4.5" : "translate-x-0.5"
+                        }`}
+                        style={{ transform: slot.is_active ? "translateX(18px)" : "translateX(2px)" }}
                       />
                     </button>
                   </td>

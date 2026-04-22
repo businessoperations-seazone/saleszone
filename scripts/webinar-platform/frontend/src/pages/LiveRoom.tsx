@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import ChatPanel from "../components/ChatPanel";
+import CTAButton from "../components/CTAButton";
 import type { Session } from "../lib/types";
 import { api } from "../lib/api";
+import { supabase } from "../lib/supabase";
 
 export default function LiveRoom() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -10,6 +13,8 @@ export default function LiveRoom() {
   const navigate = useNavigate();
 
   const [session, setSession] = useState<Session | null>(null);
+  const [name, setName] = useState<string>("");
+  const [ctaVisible, setCtaVisible] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -25,9 +30,11 @@ export default function LiveRoom() {
           navigate("/webinar/invalid");
           return;
         }
+        setName(validation.name || "");
 
         const sess = await api.getSession(sessionId!);
         setSession(sess);
+        setCtaVisible(sess.cta_active);
       } catch {
         navigate("/webinar/invalid");
       } finally {
@@ -38,21 +45,36 @@ export default function LiveRoom() {
     init();
   }, [sessionId, token, navigate]);
 
-  function reopenMeet() {
-    if (!session?.google_meet_link) return;
-    const a = document.createElement("a");
-    a.href = session.google_meet_link;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
+  // Subscribe to CTA toggle updates via Supabase Realtime
+  useEffect(() => {
+    if (!sessionId) return;
+
+    const channel = supabase
+      .channel(`session:${sessionId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "webinar_sessions",
+          filter: `id=eq.${sessionId}`,
+        },
+        (payload) => {
+          const updated = payload.new as Session;
+          setCtaVisible(updated.cta_active);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [sessionId]);
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-cyan-50 flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-[#0066CC] border-t-transparent rounded-full animate-spin" />
+      <div className="h-screen bg-slate-900 flex items-center justify-center">
+        <div className="w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -60,35 +82,35 @@ export default function LiveRoom() {
   if (!session || !sessionId) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-cyan-50 flex items-center justify-center px-4">
-      <div className="max-w-md w-full text-center">
-        {/* Live indicator */}
-        <div className="inline-flex items-center gap-2 bg-red-50 border border-red-100 rounded-full px-4 py-1.5 mb-6">
+    <div className="h-screen flex flex-col bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-100 px-4 py-3 flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-1.5">
           <span className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-          <span className="text-xs font-bold text-red-600 uppercase tracking-wide">Ao Vivo</span>
+          <span className="text-xs font-bold text-red-500 uppercase tracking-wide">
+            Ao Vivo
+          </span>
         </div>
+        <div className="w-px h-4 bg-gray-200" />
+        <h1 className="text-sm font-semibold text-gray-800">Apresentação Seazone</h1>
+      </header>
 
-        {/* Title */}
-        <h1 className="text-2xl font-bold text-slate-800 mb-3">
-          Você está na apresentação
-        </h1>
-        <p className="text-slate-600 mb-8">
-          A apresentação está acontecendo agora no Google Meet em outra aba.
-          Se fechou por engano, clique abaixo para reentrar.
-        </p>
+      {/* Chat fills remaining height */}
+      <div className="flex-1 overflow-hidden">
+        <ChatPanel
+          sessionId={sessionId}
+          token={token}
+          userName={name}
+        />
+      </div>
 
-        {/* Reenter button */}
-        <button
-          onClick={reopenMeet}
-          className="w-full py-4 bg-[#0066CC] text-white font-bold text-lg rounded-xl
-            hover:bg-blue-700 transition-colors shadow-lg shadow-blue-200"
-        >
-          Reabrir apresentação
-        </button>
-
-        <p className="text-xs text-slate-400 mt-6">
-          Apresentação Seazone com {session.closer_name || "nossa equipe"}
-        </p>
+      {/* CTA at bottom */}
+      <div className="flex-shrink-0">
+        <CTAButton
+          visible={ctaVisible}
+          sessionId={sessionId}
+          token={token}
+        />
       </div>
     </div>
   );
