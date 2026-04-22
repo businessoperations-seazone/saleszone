@@ -41,6 +41,9 @@ function sanitizeError(err: unknown): string {
 
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
 
+// TODO: extrair pdFetch, findPerson, getLatestDeal, parseMiaMotivo,
+// parseMiaErrorNote e fetchMiaErrorFromPipedrive para src/lib/pipedrive-helpers.ts
+// — duplicados em audit-lp-check.ts e src/app/api/growth/audit-lp/leads/route.ts.
 async function pdFetch(url: string) {
   const res = await fetch(url, { cache: "no-store" })
   if (!res.ok) return null
