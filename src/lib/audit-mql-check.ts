@@ -7,6 +7,8 @@ const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 const SLACK_WEBHOOK    = process.env.SLACK_WEBHOOK_AUDIT_MQL    || ""
 
+const ONCALL_MENTION = "<@U09TS4BLYRY>"
+
 const FIVE_MINUTES      = 5  * 60 * 1000
 const FOUR_HOURS        = 4  * 60 * 60 * 1000
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
@@ -24,6 +26,17 @@ async function mapLimit<T, R>(
     results.push(...await Promise.all(items.slice(i, i + limit).map(fn)))
   }
   return results
+}
+
+// Sanitiza mensagem de erro antes de enviar ao Slack:
+// - remove tokens/secrets conhecidos (Bearer, api_token)
+// - trunca em 500 caracteres para evitar floods
+function sanitizeError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer ***")
+    .replace(/api_token=[^&\s]+/g, "api_token=***")
+    .slice(0, 500)
 }
 
 // ─── Pipedrive ────────────────────────────────────────────────────────────────
@@ -184,12 +197,12 @@ async function notify(lead: LeadRecord, key: string, problem: "sem_pipedrive" | 
 
     const text =
       problem === "sem_pipedrive"
-        ? `<@U09TS4BLYRY> 🚨 *Lead sem deal no Pipedrive* — ${time}\n` +
+        ? `${ONCALL_MENTION} 🚨 *Lead sem deal no Pipedrive* — ${time}\n` +
           `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
           `*Email:* ${lead.email || "—"}  |  *Tel:* ${lead.phone || "—"}\n` +
           `*Campanha:* ${lead.campaign_name || "—"}\n` +
           `*LeadGen ID:* \`${lead.leadgen_id}\`\nO lead chegou pelo Meta Ads mas não foi encontrado no Pipedrive após 2 minutos.`
-        : `<@U09TS4BLYRY> ⚠️ *Lead sem atendimento MIA* — ${time}\n` +
+        : `${ONCALL_MENTION} ⚠️ *Lead sem atendimento MIA* — ${time}\n` +
           `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
           `*Deal:* ${dealLink || "—"}  |  *Campanha:* ${lead.campaign_name || "—"}\n` +
           miaErrorLine +
@@ -664,7 +677,7 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: `<@U09TS4BLYRY> ❌ *Erro no Audit MQL* — ${key}\n\`\`\`${err instanceof Error ? err.message : String(err)}\`\`\``,
+          text: `${ONCALL_MENTION} ❌ *Erro no Audit MQL* — ${key}\n\`\`\`${sanitizeError(err)}\`\`\``,
         }),
       }).catch(e => console.error("[audit-mql-check] Slack error notification failed:", e))
     }
