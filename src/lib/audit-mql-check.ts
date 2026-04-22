@@ -436,18 +436,21 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
 
       const personId = await findPerson(lead.email, lead.phone)
       if (!personId) {
+        if (lead.status !== "sem_pipedrive") lead.notified = false
         lead.status = "sem_pipedrive"
         await notify(lead, key, "sem_pipedrive")
         lead.notified = true
       } else {
         const deal = await getLatestDeal(personId)
         if (!deal) {
+          if (lead.status !== "sem_pipedrive") lead.notified = false
           lead.status = "sem_pipedrive"
           await notify(lead, key, "sem_pipedrive")
           lead.notified = true
         } else {
           lead.pipedrive_deal_id = deal.deal_id
           if (!deal.mia_link) {
+            if (lead.status !== "sem_mia") lead.notified = false
             lead.status = "sem_mia"
             await notify(lead, key, "sem_mia")
             lead.notified = true
