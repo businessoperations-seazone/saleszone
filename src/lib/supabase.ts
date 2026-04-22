@@ -1,3 +1,4 @@
+// Deploy trigger
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // Lazy init: evita criar o client no top-level do módulo.
