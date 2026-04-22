@@ -1,6 +1,19 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Lazy init: evita criar o client no top-level do módulo.
+// Sem isso, `next build` falha com "supabaseUrl is required" quando
+// NEXT_PUBLIC_SUPABASE_URL não está no env de build (ex: algumas envs do Vercel).
+let _client: SupabaseClient | null = null;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+function getClient(): SupabaseClient {
+  if (_client) return _client;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL/ANON_KEY missing at runtime");
+  _client = createClient(url, key);
+  return _client;
+}
+
+export const supabase = new Proxy({} as SupabaseClient, {
+  get: (_, prop) => getClient()[prop as keyof SupabaseClient],
+});
