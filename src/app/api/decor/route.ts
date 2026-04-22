@@ -52,7 +52,6 @@ export async function GET(req: NextRequest) {
         let q = admin
           .from("decor_deals")
           .select(`empreendimento, canal, rd_source, ${dateCol}, max_stage_order, status, lost_reason`)
-          .not("empreendimento", "is", null)
           .gte(dateCol, startDate);
         if (isWon) q = q.eq("status", "won");
         if (ctwaOnly) {
@@ -67,7 +66,7 @@ export async function GET(req: NextRequest) {
 
       for (const d of deals) {
         if (d.lost_reason === "Duplicado/Erro") continue;
-        const emp = d.empreendimento || "Sem empreendimento";
+        const emp = d.empreendimento || "Aguardando definição";
         const dateStr = (d[dateCol] || "").substring(0, 10);
         const idx = dateIndex.get(dateStr);
         if (idx === undefined) continue;
