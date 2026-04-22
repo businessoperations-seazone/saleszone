@@ -144,6 +144,11 @@ const SHORT: Record<string, string> = {
   "Não, mas estou disposto a instalar caso seja necessário": "Disposto instalar",
 }
 
+// Primeiros dois tokens do nome (ex: "Gabriela Lemos Silva" → "Gabriela Lemos").
+function shortName(full: string) {
+  return full.split(/\s+/).slice(0, 2).join(" ")
+}
+
 const VERTICAL_COLOR: Record<string, string> = {
   SZI:         T.azul600,
   Marketplace: T.roxo600,
@@ -415,7 +420,7 @@ export default function SlaPage() {
 
   // Agenda dos closers por vertical (próximos 2 dias úteis)
   type AgendaDay  = { date: string; label: string; pct: number }
-  type AgendaCloser = { name: string; days: AgendaDay[] }
+  type AgendaCloser = { email?: string; name: string; days: AgendaDay[] }
   const [agendaSZI,       setAgendaSZI]       = useState<AgendaCloser[]>([])
   const [agendaSZS,       setAgendaSZS]       = useState<AgendaCloser[]>([])
   const [agendaMarketplace, setAgendaMarketplace] = useState<AgendaCloser[]>([])
@@ -484,10 +489,11 @@ export default function SlaPage() {
       const d = new Date(date + "T12:00:00")
       return `${DAYS_PT[d.getDay()]} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`
     }
-    const parseClosers = (data: { closers?: Array<{ name: string; days: Array<{ date: string; occupancyPct: number }> }> } | null): AgendaCloser[] => {
+    const parseClosers = (data: { closers?: Array<{ email?: string; name: string; days: Array<{ date: string; occupancyPct: number }> }> } | null): AgendaCloser[] => {
       if (!data?.closers?.length) return []
       return data.closers.map(c => ({
-        name: c.name.split(" ")[0],
+        email: c.email,
+        name: shortName(c.name),
         days: next2.map(date => ({
           date,
           label: dayLabel(date),
@@ -1210,8 +1216,8 @@ export default function SlaPage() {
                 <span style={{ fontSize: 12, color: cor, fontWeight: 500, fontFamily: T.font }}>· {rec}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-                {agendaAtual.map(closer => (
-                  <div key={closer.name} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                {agendaAtual.map((closer) => (
+                  <div key={closer.email ?? closer.name} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: T.fg, fontFamily: T.font, minWidth: 56 }}>{closer.name}</span>
                     {closer.days.map(({ label, pct }) => (
                       <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", border: `1px solid ${T.border}`, borderRadius: 8, padding: "5px 12px" }}>
