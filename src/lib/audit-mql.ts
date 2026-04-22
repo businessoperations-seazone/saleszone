@@ -1,4 +1,12 @@
-import { put } from "@vercel/blob"
+import { put, del } from "@vercel/blob"
+
+export interface MiaErrorInfo {
+  motivo_parsed: string        // label humano ex "Número de telefone inválido"
+  raw_code?: string            // código interno ex "invalid_phone"
+  transferido_para?: string    // ex "Jeniffer Correa"
+  n8n_url?: string
+  fetched_at: string           // ISO
+}
 
 export interface LeadRecord {
   id: string
@@ -22,6 +30,7 @@ export interface LeadRecord {
   sla_ok?: boolean         // resultado da verificação SLA (undefined = não verificado)
   in_baserow?: boolean     // true = chegou no Baserow, false = não chegou, undefined = ainda não verificado
   nekt_status?: "ok" | "nao_encontrado"  // verificação Nekt às 7h BRT do dia seguinte
+  mia_error?: MiaErrorInfo  // erro capturado da Note do Pipedrive quando status=sem_mia
 }
 
 export function extractVertical(campaignName: string): string {
@@ -84,4 +93,40 @@ export async function appendLeadSafe(key: string, record: LeadRecord, retries = 
     // Foi sobrescrita — tenta de novo
   }
   return false
+}
+
+// ─── Lock atômico via Vercel Blob ─────────────────────────────────────────────
+// Usa `allowOverwrite: false` como CAS real — o put só sucede se o path ainda
+// não existir no Blob Store. Primeira tentativa vence, concorrentes recebem erro
+// e skipam o envio Slack. Sem TTL automático no Blob: orphan locks (crash após
+// acquire e antes do release) prendem o lead, mas o merge monotônico de
+// `notified=true` em runCheck garante que não duplica de qualquer forma.
+
+export async function acquireLock(lockPath: string): Promise<boolean> {
+  try {
+    await put(lockPath, new Date().toISOString(), {
+      access: "private",
+      addRandomSuffix: false,
+      allowOverwrite: false,
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    })
+    return true
+  } catch {
+    // Já existe (ou erro de rede) → outro processo tem o lock
+    return false
+  }
+}
+
+export async function releaseLock(lockPath: string): Promise<void> {
+  // @vercel/blob v2+ aceita pathname relativo em `del` — não depende mais de BLOB_URL.
+  // Antes: `if (!BLOB_URL) return` silenciava o release sempre que a env não estava
+  // populada (ex: preview deploys), deixando locks órfãos presos até TTL externo.
+  // Agora: release sempre tenta rodar e loga erro se falhar, em vez de engolir em silêncio.
+  await del(lockPath, {
+    token: process.env.BLOB_READ_WRITE_TOKEN,
+  }).catch(err => {
+    console.error("[audit-mql] releaseLock failed:", { lockPath, err })
+    // Merge monotônico em runCheck + revalidação dentro do lock protegem contra
+    // duplicata mesmo que o lock fique órfão temporariamente.
+  })
 }

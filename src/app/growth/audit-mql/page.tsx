@@ -928,14 +928,16 @@ export default function AuditMQL() {
                   const isPending  = lead.status === "aguardando"
                   const isForaSla  = lead.status === "fora_sla"
                   const isExpanded = expandedId === lead.id
-                  const hasFormValues = lead.form_values && lead.form_values.length > 0
+                  const hasFormValues = !!(lead.form_values && lead.form_values.length > 0)
+                  const hasMiaError   = !!(lead.mia_error && lead.status === "sem_mia")
+                  const canExpand     = hasFormValues || hasMiaError
 
                   return (
                     <>
                       <tr key={lead.id}
-                        onClick={() => hasFormValues ? setExpandedId(isExpanded ? null : lead.id) : undefined}
+                        onClick={() => canExpand ? setExpandedId(isExpanded ? null : lead.id) : undefined}
                         style={{ borderBottom: isExpanded ? "none" : `1px solid ${T.border}`,
-                          background: st.bg, cursor: hasFormValues ? "pointer" : "default",
+                          background: st.bg, cursor: canExpand ? "pointer" : "default",
                           transition: "filter 0.1s" }}>
                         <td style={{ padding: "10px 14px", color: T.mutedFg, fontSize: 12, whiteSpace: "nowrap" }}>
                           {(() => { const { date, time } = fmtDateTime(lead.created_at); return <><div>{date}</div><div>{time}</div></> })()}
@@ -943,7 +945,7 @@ export default function AuditMQL() {
                         <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
                           <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
                             {lead.name || <span style={{ color: T.mutedFg }}>—</span>}
-                            {hasFormValues && (
+                            {canExpand && (
                               <ChevronDown size={13} color={T.mutedFg}
                                 style={{ transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.2s", flexShrink: 0 }} />
                             )}
@@ -1003,7 +1005,20 @@ export default function AuditMQL() {
                                     <CheckCircle2 size={13} /> Conversa
                                   </a>
                                 : lead.status === "sem_mia"
-                                  ? <StatusDot ok={false} label="Sem conversa" />
+                                  ? (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                                      <StatusDot ok={false} label="Sem conversa" />
+                                      {lead.mia_error && (
+                                        <span title={lead.mia_error.raw_code || ""}
+                                          style={{ fontSize: 10, color: T.destructive, fontWeight: 600,
+                                            background: "#FEF2F2", border: `1px solid ${T.destructive}33`,
+                                            borderRadius: 3, padding: "1px 5px", whiteSpace: "nowrap",
+                                            maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>
+                                          {lead.mia_error.motivo_parsed}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )
                                   : lead.status === "sem_pipedrive"
                                     ? <span style={{ color: T.mutedFg, fontSize: 12 }}>—</span>
                                     : <StatusDot ok={false} pending label="Verificando…" />}
@@ -1029,8 +1044,8 @@ export default function AuditMQL() {
                         </td>
                       </tr>
 
-                      {/* Detalhe expandido — respostas do formulário */}
-                      {isExpanded && hasFormValues && (
+                      {/* Detalhe expandido — respostas do formulário + erro MIA */}
+                      {isExpanded && canExpand && (
                         <tr key={`${lead.id}-detail`} style={{ background: st.bg, borderBottom: `1px solid ${T.border}` }}>
                           <td colSpan={9} style={{ padding: "0 14px 14px 14px" }}>
                             <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12, marginTop: 0 }}>
@@ -1042,6 +1057,40 @@ export default function AuditMQL() {
                                   <span style={{ color: T.mutedFg }}>— respostas não se encaixam em nenhum empreendimento ativo</span>
                                 </div>
                               )}
+                              {lead.mia_error && lead.status === "sem_mia" && (
+                                <div style={{ background: "#FEF2F2", border: `1px solid ${T.destructive}44`,
+                                  borderRadius: 6, padding: "10px 14px", marginBottom: 12,
+                                  display: "flex", flexDirection: "column", gap: 4 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <span style={{ fontSize: 13 }}>⚠️</span>
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: T.destructive }}>
+                                      Erro no envio da MIA: {lead.mia_error.motivo_parsed}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 11, color: T.mutedFg, lineHeight: 1.6, paddingLeft: 23,
+                                    display: "flex", flexWrap: "wrap", gap: 12 }}>
+                                    {lead.mia_error.transferido_para && (
+                                      <span>→ Transferido para <strong style={{ color: T.fg }}>{lead.mia_error.transferido_para}</strong></span>
+                                    )}
+                                    {lead.mia_error.n8n_url && (
+                                      <a href={lead.mia_error.n8n_url} target="_blank" rel="noreferrer"
+                                        onClick={e => e.stopPropagation()}
+                                        style={{ color: T.primary, textDecoration: "none", fontWeight: 600 }}>
+                                        Ver execução n8n ↗
+                                      </a>
+                                    )}
+                                    {lead.pipedrive_deal_id && (
+                                      <a href={`https://seazone-fd92b9.pipedrive.com/deal/${lead.pipedrive_deal_id}`}
+                                        target="_blank" rel="noreferrer"
+                                        onClick={e => e.stopPropagation()}
+                                        style={{ color: T.primary, textDecoration: "none", fontWeight: 600 }}>
+                                        Ver deal no Pipedrive ↗
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                              {hasFormValues && <>
                               <div style={{ fontSize: 11, fontWeight: 700, color: T.mutedFg,
                                 textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>
                                 Respostas do formulário
@@ -1085,6 +1134,7 @@ export default function AuditMQL() {
                                     ))
                                 }
                               </div>
+                              </>}
                             </div>
                           </td>
                         </tr>
@@ -1148,7 +1198,7 @@ export default function AuditMQL() {
                 { step: "2", title: "Registro imediato como Aguardando", desc: "O lead é salvo no Blob Storage com status \"Aguardando\" e aparece na tabela em segundos. A página atualiza automaticamente a cada 30s enquanto você está no dia de hoje." },
                 { step: "3", title: "Verificação SLA (antes do Pipedrive)", desc: "Após ~2 minutos, o sistema verifica se as respostas do formulário estão dentro do SLA. Para SZI: usa o campo \"Empreendimento\" do formulário para identificar o empreendimento diretamente e checar seus critérios (intenção, faixa de investimento, pagamento). Para SZS e Marketplace: detecta a vertical pelo nome da campanha. Se o lead não atende ao SLA, é marcado como \"Fora SLA\" imediatamente, sem buscar no Pipedrive. Configuração em /growth/sla-mql." },
                 { step: "4", title: "Verificação no Pipedrive", desc: "Se passou no SLA (ou se o empreendimento não está configurado), busca a pessoa por e-mail e depois por telefone (com fallback sem código de país +55). Se não encontrar deal, classifica como \"Sem Pipedrive\" e envia alerta no Slack. Re-verifica por até 4h desde a criação." },
-                { step: "5", title: "Verificação da Morada IA", desc: "Se o deal existe, verifica o campo \"Link da Conversa\" (campo custom no Pipedrive preenchido pela Morada IA). Se vazio, classifica como \"Sem MIA\" e envia alerta no Slack. Re-verifica automaticamente a cada request por até 4h — a MIA pode ter um delay de minutos após o lead chegar." },
+                { step: "5", title: "Verificação da Morada IA", desc: "Se o deal existe, verifica o campo \"Link da Conversa\" (campo custom no Pipedrive preenchido pela Morada IA). Se vazio, classifica como \"Sem MIA\" e envia alerta no Slack. Em paralelo, busca as notes do deal no Pipedrive: se o fluxo n8n registrou \"❌ Falha no envio de mensagem pra MIA\" com o motivo do erro (número inválido, fora do WhatsApp, timeout, etc.), o motivo é parseado e aparece direto no card e no alerta — sem precisar abrir o Pipedrive. Re-verifica automaticamente a cada request por até 4h — a MIA pode ter um delay de minutos após o lead chegar." },
                 { step: "6", title: "Status OK", desc: "Lead com SLA aprovado (ou vertical sem critérios), deal encontrado no Pipedrive e campo MIA preenchido. Nenhuma ação necessária." },
                 { step: "7", title: "Verificação no Baserow (em paralelo)", desc: "Para leads das verticais Investimentos, Marketplace e Serviços criados a partir de 10/04/2026, o sistema verifica se o lead chegou na tabela do Baserow da vertical. A coluna Baserow na tabela mostra ✓ (chegou), ✗ (não chegou) ou — (não verificado / vertical sem Baserow). Verificação ocorre via acesso à página e recovery cron. Um lead não encontrado no Baserow é contado como erro no resumo diário." },
                 { step: "8", title: "Verificação Nekt (dia seguinte às 7h BRT)", desc: "Um cron diário às 7h BRT busca todos os leads do dia anterior que chegaram ao Pipedrive e consulta a tabela nekt_silver.pipedrive_deals_readable via SQL na Nekt API. Se o deal ID está na tabela → Nekt OK (✓); se não → Não encontrado (✗). Deals sem Pipedrive ficam como — (não aplicável). Um deal não encontrado na Nekt é contado como erro no resumo." },
@@ -1174,7 +1224,7 @@ export default function AuditMQL() {
               {[
                 { label: "AGUARDANDO",    color: T.primary,    desc: "Lead recém-chegado. Ainda não foi verificado — aguarda ~2 minutos antes da primeira checagem SLA + Pipedrive." },
                 { label: "OK",            color: T.verde600,   desc: "Passou no SLA (ou sem critérios configurados), deal encontrado no Pipedrive e campo \"Link da Conversa\" preenchido pela Morada IA." },
-                { label: "SEM MIA",       color: T.laranja500, desc: "Deal existe no Pipedrive, mas o campo \"Link da Conversa\" ainda não foi preenchido pela Morada IA. Alerta enviado no Slack. Re-verificado automaticamente a cada request por até 4h desde a criação do lead." },
+                { label: "SEM MIA",       color: T.laranja500, desc: "Deal existe no Pipedrive, mas o campo \"Link da Conversa\" ainda não foi preenchido pela Morada IA. Quando a MIA registrou erro explícito na Note do deal (número inválido, fora do WhatsApp, timeout, etc.), o motivo parseado aparece no card e no alerta Slack — expanda a linha para ver o fallback humano e link da execução n8n. Re-verificado automaticamente a cada request por até 4h desde a criação do lead." },
                 { label: "SEM PIPEDRIVE", color: T.destructive,desc: "Lead não encontrado no Pipedrive (nem por e-mail nem por telefone) após ~2 minutos do registro. Alerta enviado no Slack. Re-verificado por até 4h — Pipedrive pode ter lag de indexação." },
                 { label: "FORA SLA",      color: "#9333EA",    desc: "As respostas do formulário não atendem aos critérios SLA do empreendimento. Verificado ANTES do Pipedrive — lead fora do SLA não deveria estar no funil, então nenhuma busca é feita. Clique na linha para ver as respostas e qual critério foi reprovado." },
               ].map(({ label, color, desc }) => (
@@ -1212,6 +1262,90 @@ export default function AuditMQL() {
                 <div><strong style={{ color: T.fg }}>Regra de aprovação:</strong> O lead passa se atender aos critérios de pelo menos um empreendimento ativo da vertical. Para cada categoria, se não houver critério configurado (lista vazia) ou se o formulário não tiver essa pergunta, a categoria não reprova.</div>
                 <div><strong style={{ color: T.fg }}>Categorias sem resposta:</strong> Se o formulário não possui a pergunta (ex: Ponta das Canas não pergunta sobre pagamento), aquela categoria é ignorada — o lead não é reprovado por ausência de resposta.</div>
                 <div><strong style={{ color: T.fg }}>Empreendimento inativo:</strong> Se o empreendimento está com status inativo no SLA, o lead passa automaticamente sem verificação de critérios.</div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "20px 24px", boxShadow: T.elevSm }}>
+            <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>Captura do erro da MIA</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 12, color: T.mutedFg, lineHeight: 1.7 }}>
+              <p style={{ margin: 0 }}>
+                Quando a Morada IA falha ao enviar mensagem no WhatsApp, um fluxo n8n (<code>workflows.seazone.com.br</code>) grava uma Note no deal do Pipedrive descrevendo o motivo. O audit-mql busca essa Note automaticamente no momento em que classifica o lead como <strong style={{ color: T.fg }}>Sem MIA</strong> — assim você vê o motivo direto no card sem precisar abrir o Pipedrive.
+              </p>
+              <div>
+                <strong style={{ color: T.fg }}>Exemplo de Note capturada:</strong>
+                <div style={{ background: T.muted, border: `1px solid ${T.border}`, borderRadius: 6,
+                  padding: "10px 12px", marginTop: 6, fontSize: 11, fontFamily: "monospace",
+                  whiteSpace: "pre-wrap", color: T.fg }}>
+{`❌ Falha no envio de mensagem pra MIA
+Deal ID: 261256
+Motivo: 400 - "... \\"message\\": \\"Invalid phone number\\" ..."
+Status: Transferido para Jeniffer Correa
+Atividade: Fluxo de Investidor SZI
+n8n: https://workflows.seazone.com.br/workflow/.../executions/824818`}
+                </div>
+              </div>
+              <div>
+                <strong style={{ color: T.fg }}>Motivos reconhecidos e rótulos parseados:</strong>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
+                  {[
+                    { raw: "Invalid phone number",          label: "Número de telefone inválido" },
+                    { raw: "not on WhatsApp / no WhatsApp", label: "Número não está no WhatsApp" },
+                    { raw: "timeout / timed out",            label: "Timeout na conexão com a MIA" },
+                    { raw: "401 / 403 / unauthorized",       label: "Erro de autenticação no envio" },
+                    { raw: "5xx / internal server error",    label: "Erro interno do servidor MIA" },
+                    { raw: "phoneNumber (genérico)",         label: "Problema com o número de telefone" },
+                  ].map(({ raw, label }) => (
+                    <div key={raw} style={{ background: T.muted, borderRadius: 4, padding: "4px 8px", fontSize: 11 }}>
+                      <code style={{ color: T.destructive }}>{raw}</code> → <strong style={{ color: T.fg }}>{label}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11 }}>
+                  Motivos não reconhecidos caem em <code>&quot;Erro desconhecido&quot;</code> com os primeiros 120 caracteres do motivo bruto (strip de JSON cru e tags HTML).
+                </div>
+              </div>
+              <div>
+                <strong style={{ color: T.fg }}>Quando é buscado:</strong> só na transição para <code>sem_mia</code> dentro do <code>runCheck()</code>. Se o lead já tem <code>mia_error</code> recente (&lt; 1h), reusa sem nova chamada ao Pipedrive. Se a Note for adicionada depois do lead virar <code>sem_mia</code>, a próxima re-verificação (a cada 4h no máximo) captura.
+              </div>
+              <div>
+                <strong style={{ color: T.fg }}>Onde aparece:</strong> (1) chip compacto na coluna MIA da tabela com o motivo parseado, (2) bloco vermelho no detalhe expandido com o motivo, quem atendeu como fallback humano e link direto da execução n8n, (3) linha adicional no alerta Slack <em>⚠️ Lead sem atendimento MIA</em> com o motivo e o transferido.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: "20px 24px", boxShadow: T.elevSm }}>
+            <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700 }}>Garantias contra Slack duplicado</h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, fontSize: 12, color: T.mutedFg, lineHeight: 1.7 }}>
+              <p style={{ margin: 0 }}>
+                Três callers chamam <code>runCheck()</code> concorrentemente: (1) <code>webhook</code> via <code>waitUntil(delayedCheck)</code> 7 min após lead novo, (2) <code>recovery</code> cron Vercel a cada 10 min, (3) GitHub Actions fallback a cada 15 min. Sem coordenação, os 3 podem tentar notificar o mesmo lead ao mesmo tempo. Duas camadas de defesa eliminam a duplicata:
+              </p>
+              <div style={{ background: T.muted, borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.fg, marginBottom: 6 }}>1. Lock atômico em <code>notify()</code></div>
+                <div style={{ fontSize: 11 }}>
+                  Antes de enviar o Slack, o processo tenta criar um arquivo de lock via Vercel Blob:
+                  <code style={{ display: "block", background: T.border, padding: "4px 8px", marginTop: 4, borderRadius: 4 }}>
+                    put(&quot;audit-mql/locks/YYYY-MM-DD/&#123;leadId&#125;.lock&quot;, ..., &#123; allowOverwrite: false &#125;)
+                  </code>
+                  <div style={{ marginTop: 6 }}>
+                    O Blob Store rejeita o put se o caminho já existir — comportamento CAS (compare-and-swap) nativo do storage. O primeiro processo vence, os outros recebem erro e skipam o envio (log: <code>lock held lead=X — skip duplicate send</code>). Após o envio (ou falha), o lock é deletado (<code>del()</code>).
+                  </div>
+                </div>
+              </div>
+              <div style={{ background: T.muted, borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.fg, marginBottom: 6 }}>2. Merge fresco monotônico em <code>runCheck()</code></div>
+                <div style={{ fontSize: 11 }}>
+                  O <code>runCheck</code> carrega um snapshot inicial do Blob, processa por segundos (Pipedrive + Baserow + SLA), e precisa escrever de volta. Entre o read e o write, outro processo pode ter marcado <code>notified=true</code> no Blob. Se sobrescrevêssemos cegamente com o snapshot antigo, o <code>notified=true</code> se perderia e o próximo run disparia Slack de novo.
+                  <div style={{ marginTop: 6 }}>
+                    Solução: <strong style={{ color: T.fg }}>relê o Blob no fim do runCheck</strong> e faz merge monotônico — se fresh tem <code>notified=true</code>, mantém true mesmo que o snapshot processado tenha false. Resultado: <code>notified: true</code> nunca regride.
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: 11 }}>
+                <strong style={{ color: T.fg }}>Log estruturado:</strong> toda notificação bem-sucedida gera <code>[audit-mql-notify] sent slack lead=X problem=Y vertical=Z ts=N</code> nos logs Vercel. Falhas e skips também são registrados explicitamente — facilita diagnóstico post-hoc de qualquer duplicata futura.
+              </div>
+              <div style={{ fontSize: 11 }}>
+                <strong style={{ color: T.fg }}>Orphan locks:</strong> se o processo crashar entre <code>acquireLock</code> e <code>releaseLock</code>, o lock fica preso. Isso não causa duplicata (o lead não será notificado de novo pelo lock travado + merge monotônico), mas pode prender um lead genuíno em estado não-notificado. Sem TTL automático — limpeza manual via endpoint ou via <code>recovery</code> cron se necessário.
               </div>
             </div>
           </div>
@@ -1363,9 +1497,9 @@ export default function AuditMQL() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {[
                   { trigger: "🚨 Lead sem deal no Pipedrive", when: "Na primeira verificação onde o lead não é encontrado (~2 min após chegar). Inclui nome, e-mail, telefone, campanha e LeadGen ID." },
-                  { trigger: "⚠️ Lead sem atendimento MIA", when: "Na primeira verificação onde o deal existe mas o campo \"Link da Conversa\" está vazio. Inclui nome, vertical, link do deal no Pipedrive e campanha." },
+                  { trigger: "⚠️ Lead sem atendimento MIA", when: "Na primeira verificação onde o deal existe mas o campo \"Link da Conversa\" está vazio. Inclui nome, vertical, link do deal no Pipedrive, campanha e — quando há erro explícito na Note do Pipedrive — o motivo parseado (ex: \"Número de telefone inválido\") e quem recebeu o lead como fallback humano." },
                   { trigger: "Sem alerta para Fora SLA", when: "Leads fora do SLA não disparam alerta — por design, esses leads não deveriam estar no funil e a equipe não precisa de ação." },
-                  { trigger: "Sem alerta duplicado", when: "Cada lead alerta no máximo uma vez (campo notified=true após envio). Re-verificações posteriores não reenviam o alerta mesmo se o status mudar." },
+                  { trigger: "Sem alerta duplicado", when: "Três garantias combinadas: (1) checagem in-memory do campo notified antes de entrar no fluxo, (2) lock atômico via Vercel Blob em audit-mql/locks/ (allowOverwrite: false — CAS nativo), (3) merge monotônico no fim do runCheck que nunca reverte notified=true para false. Ver card \"Garantias contra Slack duplicado\" para detalhes." },
                   { trigger: "📊 Resumo diário (7h30 BRT)", when: "Enviado automaticamente todo dia. Mostra: total de leads (com quantos fora do SLA), MQL (leads que passaram no SLA), atendidos pela MIA, erros reais e breakdown por vertical. Erros = sem Pipedrive + sem MIA + não chegou no Baserow + não encontrado na Nekt. Fora SLA não conta como erro. Token Meta alerta só quando faltam 5 dias ou menos." },
                 ].map(({ trigger, when }) => (
                   <div key={trigger} style={{ display: "flex", gap: 10 }}>
@@ -1427,7 +1561,8 @@ export default function AuditMQL() {
             <div style={{ display: "flex", flexDirection: "column", gap: 8, fontSize: 12, color: T.mutedFg, lineHeight: 1.7 }}>
               <p style={{ margin: 0 }}>Todos os dados são persistidos no Vercel Blob Storage (privado). Não usa banco de dados relacional.</p>
               {[
-                { path: "audit-mql/YYYY-MM-DD.json", desc: "Um arquivo por dia (fuso BRT = UTC-3). Contém array de todos os LeadRecords do dia com status, respostas do formulário, IDs Pipedrive, link MIA, in_baserow e nekt_status." },
+                { path: "audit-mql/YYYY-MM-DD.json", desc: "Um arquivo por dia (fuso BRT = UTC-3). Contém array de todos os LeadRecords do dia com status, respostas do formulário, IDs Pipedrive, link MIA, in_baserow, nekt_status e mia_error (quando aplicável)." },
+                { path: "audit-mql/locks/YYYY-MM-DD/{leadId}.lock", desc: "Lock atômico para envio de Slack. Criado com allowOverwrite:false antes do envio e deletado logo após. Garante que apenas um processo envia o alerta entre webhook delayedCheck, recovery cron e GitHub Actions." },
                 { path: "audit-mql/log.json", desc: "Histórico dos resumos diários (últimos 90 dias). Usado pela aba Log Diário. Cada entrada tem: total, mql, mia, fora_sla, erros, breakdown por vertical, Baserow e Nekt." },
                 { path: "sla-mql/data.json", desc: "Configuração atual do SLA: rows (empreendimentos com critérios por categoria) e forms (perguntas por vertical). Editado via /growth/sla-mql." },
                 { path: "sla-mql/log.json", desc: "Histórico de alterações no SLA (últimas 500 entradas). Registra quem alterou, o quê e quando." },
