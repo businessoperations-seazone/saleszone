@@ -23,6 +23,7 @@ export default function RegistrationForm({ session, onSuccess, onBack }: Registr
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [dealUrl, setDealUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,6 +38,7 @@ export default function RegistrationForm({ session, onSuccess, onBack }: Registr
         name,
         email,
         phone,
+        ...(dealUrl.trim() ? { pipedrive_deal_url: dealUrl.trim() } : {}),
       });
       // API returns { access_token, room_url } or similar
       const roomUrl = result?.room_url || `/webinar/sala/${session.id}`;
@@ -103,6 +105,22 @@ export default function RegistrationForm({ session, onSuccess, onBack }: Registr
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder="(48) 99999-9999"
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
+              focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="reg-deal-url">
+            Link do deal no Pipedrive{" "}
+            <span className="text-gray-400 font-normal">(opcional)</span>
+          </label>
+          <input
+            id="reg-deal-url"
+            type="url"
+            value={dealUrl}
+            onChange={(e) => setDealUrl(e.target.value)}
+            placeholder="https://seazone-fd92b9.pipedrive.com/deal/..."
             className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm
               focus:outline-none focus:ring-2 focus:ring-blue-300 focus:border-blue-400"
           />

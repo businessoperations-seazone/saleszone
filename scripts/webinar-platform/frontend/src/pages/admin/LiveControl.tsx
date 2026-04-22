@@ -1,12 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useOutletContext } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import type { Session, Registration, Message } from "../../lib/types";
 import { api } from "../../lib/api";
 import { supabase } from "../../lib/supabase";
-
-interface AdminContext {
-  token: string;
-}
 
 function formatTime(iso: string): string {
   const d = new Date(iso);
@@ -19,7 +15,6 @@ function formatDate(iso: string): string {
 
 export default function LiveControl() {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const { token } = useOutletContext<AdminContext>();
 
   const [session, setSession] = useState<Session | null>(null);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
@@ -33,13 +28,13 @@ export default function LiveControl() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!sessionId || !token) return;
+    if (!sessionId) return;
 
     async function init() {
       try {
         const [sess, regs, msgs] = await Promise.all([
           api.getSession(sessionId!),
-          api.admin.getSessionRegistrations(token, sessionId!),
+          api.admin.getSessionRegistrations(sessionId!),
           api.getMessages(sessionId!),
         ]);
         setSession(sess);
@@ -55,7 +50,7 @@ export default function LiveControl() {
     }
 
     init();
-  }, [sessionId, token]);
+  }, [sessionId]);
 
   // Subscribe to messages realtime
   useEffect(() => {
@@ -101,7 +96,7 @@ export default function LiveControl() {
   async function handleStatusChange(newStatus: "live" | "ended") {
     if (!sessionId) return;
     try {
-      const updated = await api.admin.updateSessionStatus(token, sessionId, newStatus);
+      const updated = await api.admin.updateSessionStatus(sessionId, newStatus);
       setSession(updated);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao atualizar status");
@@ -112,7 +107,7 @@ export default function LiveControl() {
     if (!sessionId || !session) return;
     setTogglingCTA(true);
     try {
-      await api.admin.toggleCTA(token, sessionId, !session.cta_active);
+      await api.admin.toggleCTA(sessionId, !session.cta_active);
       setSession((s) => s ? { ...s, cta_active: !s.cta_active } : s);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao alternar CTA");
@@ -127,7 +122,7 @@ export default function LiveControl() {
     if (!content || sending || !sessionId) return;
     setSending(true);
     try {
-      await api.admin.sendPresenterMessage(token, sessionId, content, presenterEmail);
+      await api.admin.sendPresenterMessage(sessionId, content, presenterEmail);
       setChatInput("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Erro ao enviar mensagem");
@@ -143,7 +138,6 @@ export default function LiveControl() {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
       });
       setMessages((prev) => prev.filter((m) => m.id !== messageId));

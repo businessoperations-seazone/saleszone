@@ -1,17 +1,12 @@
 import { useState, useEffect } from "react";
-import { useOutletContext } from "react-router-dom";
 import { api } from "../../lib/api";
 
-interface AdminContext {
-  token: string;
-}
-
 interface DashboardData {
-  sessions_today: number;
+  sessions: number;
   live_now: number;
-  total_registered: number;
-  total_attended: number;
-  total_converted: number;
+  registered: number;
+  attended: number;
+  converted: number;
   conversion_rate: number;
 }
 
@@ -31,18 +26,16 @@ function StatCard({ label, value, color }: StatCardProps) {
 }
 
 export default function Dashboard() {
-  const { token } = useOutletContext<AdminContext>();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    api.admin.getDashboard(token)
+    api.admin.getDashboard()
       .then((d) => setData(d))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [token]);
+  }, []);
 
   return (
     <div className="p-6">
@@ -62,11 +55,11 @@ export default function Dashboard() {
 
       {data && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <StatCard label="Sessões hoje" value={data.sessions_today ?? 0} color="text-gray-900" />
+          <StatCard label="Sessões hoje" value={data.sessions ?? 0} color="text-gray-900" />
           <StatCard label="Ao vivo agora" value={data.live_now ?? 0} color="text-green-600" />
-          <StatCard label="Inscritos" value={data.total_registered ?? 0} color="text-blue-600" />
-          <StatCard label="Presentes" value={data.total_attended ?? 0} color="text-indigo-600" />
-          <StatCard label="Convertidos" value={data.total_converted ?? 0} color="text-purple-600" />
+          <StatCard label="Inscritos" value={data.registered ?? 0} color="text-blue-600" />
+          <StatCard label="Presentes" value={data.attended ?? 0} color="text-indigo-600" />
+          <StatCard label="Convertidos" value={data.converted ?? 0} color="text-purple-600" />
           <StatCard
             label="Taxa de conversão"
             value={`${((data.conversion_rate ?? 0) * 100).toFixed(1)}%`}

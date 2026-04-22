@@ -51,7 +51,7 @@ export default function Countdown({ targetTime, onReached }: CountdownProps) {
   if (reachedRef.current) return null;
 
   return (
-    <span className="font-mono text-2xl font-bold text-gray-800">
+    <span className="font-mono text-5xl font-bold text-blue-700">
       {formatSeconds(remaining)}
     </span>
   );
