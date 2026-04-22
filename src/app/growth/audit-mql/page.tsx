@@ -586,6 +586,16 @@ export default function AuditMQL() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ShieldAlert size={22} color={T.destructive} />
           <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Audit MQL</h1>
+          <nav style={{ display: "flex", gap: 6, marginLeft: 16 }}>
+            <span style={{
+              padding: "4px 10px", fontSize: 12, fontWeight: 600,
+              color: T.bg, background: T.primary, borderRadius: 6,
+            }}>Meta Ads</span>
+            <Link href="/growth/audit-lp" style={{
+              padding: "4px 10px", fontSize: 12, textDecoration: "none",
+              color: T.mutedFg, border: `1px solid ${T.border}`, borderRadius: 6,
+            }}>Landing Pages</Link>
+          </nav>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {lastUpdate && !loading && tab === "leads" && (
