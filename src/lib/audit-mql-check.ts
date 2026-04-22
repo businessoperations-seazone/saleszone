@@ -1,4 +1,4 @@
-import { LeadRecord, readLeads, writeLeads } from "@/lib/audit-mql"
+import { LeadRecord, MiaErrorInfo, acquireLock, readLeads, releaseLock, writeLeads } from "@/lib/audit-mql"
 import { readData, SlaRow, SlaData } from "@/lib/sla-mql-blob"
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase"
 
@@ -60,42 +60,147 @@ async function getLatestDeal(personId: number): Promise<{ deal_id: number; mia_l
   return { deal_id: deal.id as number, mia_link: (deal[MIA_FIELD_KEY] as string) || null }
 }
 
+// ─── Erro da MIA — Pipedrive Notes ────────────────────────────────────────────
+// Quando a MIA falha em enviar mensagem, um fluxo n8n grava uma Note no deal
+// com o motivo (400 Invalid phone number, não-WhatsApp, etc), quem atendeu como
+// fallback humano e link da execução n8n. Aqui buscamos essa Note para
+// enriquecer o card do audit-mql e evitar que o usuário entre no Pipedrive.
+
+function parseMiaMotivo(raw: string): { label: string; code?: string } {
+  const s = raw.replace(/\s+/g, " ").trim()
+  if (/invalid phone number/i.test(s))              return { label: "Número de telefone inválido",     code: "invalid_phone" }
+  if (/not.*whatsapp|not on whatsapp|no whatsapp/i.test(s)) return { label: "Número não está no WhatsApp",      code: "not_on_whatsapp" }
+  if (/timeout|timed out/i.test(s))                 return { label: "Timeout na conexão com a MIA",    code: "timeout" }
+  if (/\b(401|403)\b|unauthor|forbidden/i.test(s))  return { label: "Erro de autenticação no envio",   code: "auth_error" }
+  if (/\b(5\d\d)\b|internal server error/i.test(s)) return { label: "Erro interno do servidor MIA",    code: "server_error" }
+  if (/phonenumber/i.test(s))                       return { label: "Problema com o número de telefone", code: "phone_issue" }
+  // Fallback: primeiros 120 chars do motivo bruto, sem JSON cru feio
+  const clean = s.replace(/["\[\]{}\\]/g, "").replace(/code: custom/gi, "").replace(/path: phoneNumber/gi, "").trim()
+  return { label: clean.slice(0, 120) || "Erro desconhecido" }
+}
+
+function parseMiaErrorNote(content: string): MiaErrorInfo | null {
+  // Notes do Pipedrive vêm como HTML. Tira tags e normaliza entidades básicas.
+  const plain = content
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+
+  if (!/Falha no envio de mensagem pra MIA/i.test(plain)) return null
+
+  const motivoMatch = plain.match(/Motivo:\s*([\s\S]*?)(?=\n\s*(?:Status|Atividade|n8n):|$)/i)
+  const statusMatch = plain.match(/Status:\s*([^\n]+)/i)
+  const n8nMatch    = plain.match(/(https?:\/\/workflows\.seazone\.com\.br\/\S+)/i)
+
+  const rawMotivo = motivoMatch?.[1]?.trim() || ""
+  const { label, code } = parseMiaMotivo(rawMotivo)
+
+  const rawStatus = statusMatch?.[1]?.trim() || ""
+  const transferido = rawStatus.replace(/^Transferido para\s+/i, "").trim() || undefined
+
+  return {
+    motivo_parsed: label,
+    raw_code: code,
+    transferido_para: transferido,
+    n8n_url: n8nMatch?.[1],
+    fetched_at: new Date().toISOString(),
+  }
+}
+
+async function fetchMiaErrorFromPipedrive(dealId: number): Promise<MiaErrorInfo | null> {
+  if (!PIPEDRIVE_TOKEN || !dealId) return null
+  const url = `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/deals/${dealId}/notes` +
+    `?sort=add_time%20DESC&limit=10&api_token=${PIPEDRIVE_TOKEN}`
+  try {
+    const data = await pdFetch(url)
+    const notes = (data?.data || []) as { content?: string }[]
+    for (const n of notes) {
+      const parsed = parseMiaErrorNote(n.content || "")
+      if (parsed) return parsed
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 // ─── Notificação Slack ────────────────────────────────────────────────────────
 
 async function notify(lead: LeadRecord, key: string, problem: "sem_pipedrive" | "sem_mia") {
   if (!SLACK_WEBHOOK || lead.notified) return
 
-  // Re-read blob and mark notified BEFORE sending Slack.
-  // Guards against concurrent runCheck() processes (recovery cron + GH Actions + webhook)
-  // that read the same blob snapshot and both try to notify.
-  const fresh = await readLeads(key).catch(() => [])
-  const target = fresh.find(l => l.id === lead.id)
-  if (!target || target.notified) return
-  target.notified = true
-  await writeLeads(key, fresh).catch(() => {})
+  // Lock atômico via Blob `allowOverwrite: false`. Garante que mesmo com 3 callers
+  // concorrentes (webhook delayedCheck + recovery cron + GH Actions) só um envia.
+  // Anteriormente o padrão read → mark notified → write → send Slack tinha janela
+  // de ~100-500ms entre read e write que permitia 2 processos enviarem duplicado.
+  const lockPath = `audit-mql/locks/${key}/${lead.id}.lock`
+  const got = await acquireLock(lockPath)
+  if (!got) {
+    console.log(`[audit-mql-notify] lock held lead=${lead.id} problem=${problem} — skip duplicate send`)
+    return
+  }
 
-  const time = new Date(lead.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })
-  const dealLink = lead.pipedrive_deal_id
-    ? `<https://seazone-fd92b9.pipedrive.com/deal/${lead.pipedrive_deal_id}|#${lead.pipedrive_deal_id}>`
-    : null
+  try {
+    // Dentro do lock: revalida contra o estado mais recente do Blob. Cobre o caso
+    // de outro processo já ter notificado e liberado o lock antes de chegarmos aqui.
+    const fresh = await readLeads(key).catch(() => [])
+    const target = fresh.find(l => l.id === lead.id)
+    if (target?.notified) {
+      console.log(`[audit-mql-notify] already notified lead=${lead.id} — skip`)
+      return
+    }
 
-  const text =
-    problem === "sem_pipedrive"
-      ? `<@U09TS4BLYRY> 🚨 *Lead sem deal no Pipedrive* — ${time}\n` +
-        `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
-        `*Email:* ${lead.email || "—"}  |  *Tel:* ${lead.phone || "—"}\n` +
-        `*Campanha:* ${lead.campaign_name || "—"}\n` +
-        `*LeadGen ID:* \`${lead.leadgen_id}\`\nO lead chegou pelo Meta Ads mas não foi encontrado no Pipedrive após 2 minutos.`
-      : `<@U09TS4BLYRY> ⚠️ *Lead sem atendimento MIA* — ${time}\n` +
-        `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
-        `*Deal:* ${dealLink || "—"}  |  *Campanha:* ${lead.campaign_name || "—"}\n` +
-        `O deal existe no Pipedrive mas o campo *Link da Conversa* não foi preenchido pela Morada IA.`
+    // Marca notified ANTES do Slack. O merge monotônico em runCheck garante que
+    // um write paralelo não reverte `notified: true` para `false` depois.
+    if (target) {
+      target.notified = true
+      await writeLeads(key, fresh).catch(() => {})
+    }
 
-  await fetch(SLACK_WEBHOOK, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  }).catch(err => console.error("[audit-mql-notify] Slack error:", err))
+    const time = new Date(lead.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })
+    const dealLink = lead.pipedrive_deal_id
+      ? `<https://seazone-fd92b9.pipedrive.com/deal/${lead.pipedrive_deal_id}|#${lead.pipedrive_deal_id}>`
+      : null
+
+    // Linha extra no Slack quando temos motivo parseado do erro MIA
+    const miaErrorLine = (problem === "sem_mia" && lead.mia_error)
+      ? `*Erro MIA:* ${lead.mia_error.motivo_parsed}` +
+        (lead.mia_error.transferido_para ? `  |  *Transferido para:* ${lead.mia_error.transferido_para}` : "") +
+        "\n"
+      : ""
+
+    const text =
+      problem === "sem_pipedrive"
+        ? `<@U09TS4BLYRY> 🚨 *Lead sem deal no Pipedrive* — ${time}\n` +
+          `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
+          `*Email:* ${lead.email || "—"}  |  *Tel:* ${lead.phone || "—"}\n` +
+          `*Campanha:* ${lead.campaign_name || "—"}\n` +
+          `*LeadGen ID:* \`${lead.leadgen_id}\`\nO lead chegou pelo Meta Ads mas não foi encontrado no Pipedrive após 2 minutos.`
+        : `<@U09TS4BLYRY> ⚠️ *Lead sem atendimento MIA* — ${time}\n` +
+          `*Nome:* ${lead.name || "—"}  |  *Vertical:* ${lead.vertical || "—"}\n` +
+          `*Deal:* ${dealLink || "—"}  |  *Campanha:* ${lead.campaign_name || "—"}\n` +
+          miaErrorLine +
+          `O deal existe no Pipedrive mas o campo *Link da Conversa* não foi preenchido pela Morada IA.`
+
+    const res = await fetch(SLACK_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).catch(err => { console.error("[audit-mql-notify] Slack error:", err); return null })
+
+    if (res && res.ok) {
+      console.log(`[audit-mql-notify] sent slack lead=${lead.id} problem=${problem} vertical=${lead.vertical} ts=${Date.now()}`)
+    } else if (res) {
+      console.error(`[audit-mql-notify] Slack non-OK status=${res.status} lead=${lead.id}`)
+    }
+  } finally {
+    await releaseLock(lockPath)
+  }
 }
 
 // ─── Verificação SLA ──────────────────────────────────────────────────────────
@@ -452,6 +557,16 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
           if (!deal.mia_link) {
             if (lead.status !== "sem_mia") lead.notified = false
             lead.status = "sem_mia"
+            // Pre-fetch do erro MIA da Note do Pipedrive. Assim o card já mostra
+            // motivo parseado sem o usuário precisar entrar no Pipedrive.
+            // Busca só quando mia_error ainda não foi capturado ou é antigo (>1h).
+            const miaErrorStale =
+              !lead.mia_error ||
+              (Date.now() - new Date(lead.mia_error.fetched_at).getTime() > 60 * 60 * 1000)
+            if (miaErrorStale) {
+              const err = await fetchMiaErrorFromPipedrive(deal.deal_id)
+              if (err) lead.mia_error = err
+            }
             await notify(lead, key, "sem_mia")
             lead.notified = true
           } else {
@@ -465,13 +580,49 @@ export async function runCheck(key: string): Promise<{ checked: number; resolved
     }
 
     const pendingMap = new Map(batch.map(l => [l.id, l]))
-    const updatedLeads = leads.map(l => pendingMap.get(l.id) || l)
 
-    // Enriquece Baserow só para a data de hoje — não toca em histórico
+    // Enriquece Baserow só para a data de hoje — não toca em histórico.
+    // Baserow enrichment pode atualizar leads fora do `batch` — fazemos aqui
+    // em cima de `leads` (snapshot inicial) e depois o merge fresco incorpora.
     const today = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10)
-    if (key === today) await enrichBaserow(updatedLeads)
+    if (key === today) {
+      const merged = leads.map(l => pendingMap.get(l.id) || l)
+      await enrichBaserow(merged)
+      // Propaga mudanças do enrichBaserow (mutação in-place) de volta pra pendingMap
+      for (const l of merged) if (pendingMap.has(l.id)) pendingMap.set(l.id, l)
+      // Adiciona leads fora do batch que foram alterados pelo enrichBaserow
+      for (const l of merged) if (!pendingMap.has(l.id) && l.in_baserow !== undefined) pendingMap.set(l.id, l)
+    }
 
-    await writeLeads(key, updatedLeads)
+    // ─── Merge fresco (monotônico em notified) ──────────────────────────────
+    // Entre o readLeads inicial (linha 388) e aqui passaram segundos de I/O
+    // (Pipedrive + Baserow + SLA). Outro caller do runCheck pode ter escrito
+    // notified=true no blob. Se fizéssemos write direto do snapshot antigo,
+    // reverteríamos notified para false e causaríamos duplicata de Slack.
+    // Solução: relê fresh e aplica merge monotônico — notified=true nunca volta.
+    const fresh = await readLeads(key).catch(() => leads)
+    const freshMap = new Map(fresh.map(l => [l.id, l]))
+    const finalLeads: LeadRecord[] = []
+
+    // Começa do fresh (inclui leads novos que chegaram por webhook enquanto processávamos)
+    for (const f of fresh) {
+      const processed = pendingMap.get(f.id)
+      if (!processed) {
+        finalLeads.push(f)
+        continue
+      }
+      finalLeads.push({
+        ...processed,
+        // Monotônico: se fresh já disse notified=true, mantém true
+        notified: f.notified === true ? true : processed.notified,
+      })
+    }
+    // Adiciona leads do pendingMap que sumiram do fresh (edge case raro: delete concorrente)
+    for (const [id, p] of pendingMap) {
+      if (!freshMap.has(id)) finalLeads.push(p)
+    }
+
+    await writeLeads(key, finalLeads)
 
     return { checked: batch.length, resolved }
   } catch (err) {
