@@ -487,7 +487,7 @@ export default function SlaPage() {
     const parseClosers = (data: { closers?: Array<{ name: string; days: Array<{ date: string; occupancyPct: number }> }> } | null): AgendaCloser[] => {
       if (!data?.closers?.length) return []
       return data.closers.map(c => ({
-        name: c.name.split(" ")[0],
+        name: c.name.split(" ").slice(0, 2).join(" "),
         days: next2.map(date => ({
           date,
           label: dayLabel(date),
@@ -1210,8 +1210,8 @@ export default function SlaPage() {
                 <span style={{ fontSize: 12, color: cor, fontWeight: 500, fontFamily: T.font }}>· {rec}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-                {agendaAtual.map(closer => (
-                  <div key={closer.name} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                {agendaAtual.map((closer, ci) => (
+                  <div key={ci} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: T.fg, fontFamily: T.font, minWidth: 56 }}>{closer.name}</span>
                     {closer.days.map(({ label, pct }) => (
                       <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff", border: `1px solid ${T.border}`, borderRadius: 8, padding: "5px 12px" }}>
