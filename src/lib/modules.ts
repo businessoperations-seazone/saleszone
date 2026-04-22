@@ -113,12 +113,8 @@ const DECOR_SQUADS: readonly SquadDef[] = [
     marketing: "",
     preVenda: "Rubia Lorena Santos",
     venda: "",
-    empreendimentos: [
-      "Aguardando definição", "Marista 144 Spot", "Batel Spot", "Canas Beach Spot",
-      "Urubici Spot II", "Meireles Spot", "Rosa Sul Spot", "Japaratinga Spot",
-      "Canasvieiras Spot", "Foz Spot", "Jurerê Spot II", "Santo Antônio Spot",
-      "Bonito Spot II", "Trancoso Spot", "Campeche Spot",
-    ],
+    // Lista dinâmica: rota /api/decor/acompanhamento pega empreendimentos ativos do DB
+    empreendimentos: [],
   },
 ] as const;
 
