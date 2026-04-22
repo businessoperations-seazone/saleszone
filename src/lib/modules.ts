@@ -113,12 +113,11 @@ const DECOR_SQUADS: readonly SquadDef[] = [
     marketing: "",
     preVenda: "Rubia Lorena Santos",
     venda: "",
-    // Decor usa cidades (cidade_do_imovel do Pipedrive), não empreendimentos.
-    // Mantém em sincronia com cidades vistas em decor_daily_counts.empreendimento.
     empreendimentos: [
-      "Florianópolis, SC", "Barra Velha, SC", "Curitiba, PR", "Salvador, BA",
-      "Foz do Iguaçu, PR", "Belo Horizonte, MG", "Fortaleza, CE", "São Paulo, SP",
-      "Caldas Novas, GO", "Japaratinga, AL", "Bonito, MS", "Sem cidade",
+      "Aguardando definição", "Marista 144 Spot", "Batel Spot", "Canas Beach Spot",
+      "Urubici Spot II", "Meireles Spot", "Rosa Sul Spot", "Japaratinga Spot",
+      "Canasvieiras Spot", "Foz Spot", "Jurerê Spot II", "Santo Antônio Spot",
+      "Bonito Spot II", "Trancoso Spot", "Campeche Spot",
     ],
   },
 ] as const;
