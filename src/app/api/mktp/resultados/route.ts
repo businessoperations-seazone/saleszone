@@ -152,7 +152,7 @@ export async function GET() {
     for (const ch of CHANNEL_ORDER) channelCounts[ch] = {};
 
     for (const deal of deals) {
-      if (deal.lost_reason === "Duplicado/Erro") continue;
+      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
       const group = getCanalGroup(String(deal.canal || ""));
       for (const tab of TABS) {
         const dateCol = TAB_DATE_COL[tab];
@@ -185,7 +185,7 @@ export async function GET() {
     for (const ch of CHANNEL_ORDER) { funnelReserva[ch] = 0; funnelContrato[ch] = 0; }
 
     for (const deal of deals) {
-      if (deal.lost_reason === "Duplicado/Erro") continue;
+      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
       // Deal must have closed in current month (won or lost)
       const closeDate = deal.status === "won" ? toDate(deal.won_time) : toDate(deal.lost_time);
       const isOpen = deal.status === "open";
@@ -388,7 +388,7 @@ export async function GET() {
     }
 
     for (const d of histDeals) {
-      if (d.lost_reason === "Duplicado/Erro") continue;
+      if (d.lost_reason && String(d.lost_reason).toLowerCase() === "duplicado/erro") continue;
       const addDay = toDate(d.add_time) || "";
       const closeDay = d.status === "won" ? toDate(d.won_time) : d.status === "lost" ? toDate(d.lost_time) : null;
       const mso = d.max_stage_order || 0;
@@ -508,8 +508,8 @@ export async function GET() {
         metrics,
         lastMonthWon: prevWon[name] || 0,
         snapshots: {
-          aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
-          emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
+          aguardandoDados: snap.reserva || 0,
+          emContrato: snap.contrato || 0,
         },
         // Parcerias não tem reuniões — zera No-Show e Ocupação Agenda
         ocupacaoAgenda: name === "Parcerias" ? { agendadas: 0, capacidade: 0, percent: 0 } : { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
