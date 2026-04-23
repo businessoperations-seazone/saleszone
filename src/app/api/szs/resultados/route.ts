@@ -910,7 +910,7 @@ export async function GET(request: NextRequest) {
         opp: { real: counts.opp || 0, meta: meta.opp },
         won: { real: counts.won || 0, meta: meta.won },
       };
-      if (name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
+      if (name === "Geral" || name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       if (meta.leads != null) metrics.leads = { real: counts.mql || 0, meta: meta.leads };
 
       // Charts use delta-computed history from szs_deals
