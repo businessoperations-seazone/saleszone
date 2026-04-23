@@ -174,35 +174,37 @@ export async function GET() {
       prevWon["Funil Completo"] = (prevWon["Funil Completo"] || 0) + 1;
     }
 
-    /* ── 3b. Reserva/Contrato acumulado no mês (coorte de deals fechados) ── */
-    // Deals fechados no mês (won ou lost) que passaram por Reserva (max_stage_order >= 12)
-    // ou Contrato (max_stage_order >= 13). Exclui Duplicado/Erro em JS (neq exclui NULLs).
-    const RESERVA_MIN_ORDER = 12;
-    const CONTRATO_MIN_ORDER = 13;
+    /* ── 3b. Reserva/Contrato do mês — via reserva_entered_at / contrato_entered_at ── */
+    // Deals que ENTRARAM na etapa Reserva (305) ou Contrato (271) no mês, via Nekt deal_flow.
+    const nextMonthStart = `${new Date(year, month + 1, 1).toISOString().substring(0, 10)}`;
+    const [reservaMesRows, contratoMesRows] = await Promise.all([
+      paginate((o, ps) =>
+        admin.from("mktp_deals").select("canal, lost_reason")
+          .gte("reserva_entered_at", startDate).lt("reserva_entered_at", nextMonthStart)
+          .range(o, o + ps - 1)
+      ),
+      paginate((o, ps) =>
+        admin.from("mktp_deals").select("canal, lost_reason")
+          .gte("contrato_entered_at", startDate).lt("contrato_entered_at", nextMonthStart)
+          .range(o, o + ps - 1)
+      ),
+    ]);
 
     const funnelReserva: Record<string, number> = {};
     const funnelContrato: Record<string, number> = {};
     for (const ch of CHANNEL_ORDER) { funnelReserva[ch] = 0; funnelContrato[ch] = 0; }
 
-    for (const deal of deals) {
+    for (const deal of reservaMesRows) {
       if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
-      // Deal must have closed in current month (won or lost)
-      const closeDate = deal.status === "won" ? toDate(deal.won_time) : toDate(deal.lost_time);
-      const isOpen = deal.status === "open";
-      // Include open deals too (they're currently in the funnel)
-      if (!isOpen && (!closeDate || closeDate < startDate)) continue;
-
-      const mso = deal.max_stage_order || 0;
       const group = getCanalGroup(String(deal.canal || ""));
-
-      if (mso >= RESERVA_MIN_ORDER) {
-        funnelReserva[group]++;
-        funnelReserva["Funil Completo"]++;
-      }
-      if (mso >= CONTRATO_MIN_ORDER) {
-        funnelContrato[group]++;
-        funnelContrato["Funil Completo"]++;
-      }
+      funnelReserva[group]++;
+      funnelReserva["Funil Completo"]++;
+    }
+    for (const deal of contratoMesRows) {
+      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
+      const group = getCanalGroup(String(deal.canal || ""));
+      funnelContrato[group]++;
+      funnelContrato["Funil Completo"]++;
     }
 
     /* ── 4. Meta Ads spend (max por ad_id, soma = gasto real do mês) ── */

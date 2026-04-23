@@ -814,6 +814,107 @@ async function syncDealsFlow(apiToken: string, supabase: any) {
   };
 }
 
+// ---- Nekt Data API helpers ----
+async function queryNekt(nektApiKey: string, sql: string): Promise<Record<string, string | null>[]> {
+  const queryRes = await fetch("https://api.nekt.ai/api/v1/sql-query/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": nektApiKey },
+    body: JSON.stringify({ sql, mode: "csv" }),
+  });
+  if (!queryRes.ok) throw new Error(`Nekt API error (${queryRes.status}): ${await queryRes.text()}`);
+  const queryData = await queryRes.json();
+  let presignedUrl: string | undefined;
+  if (queryData.presigned_url) presignedUrl = queryData.presigned_url;
+  else if (Array.isArray(queryData.presigned_urls) && queryData.presigned_urls.length > 0) presignedUrl = queryData.presigned_urls[0];
+  else if (queryData.url) presignedUrl = queryData.url;
+  if (!presignedUrl) throw new Error(`Nekt API: no presigned_url — ${JSON.stringify(queryData)}`);
+  const csvRes = await fetch(presignedUrl);
+  if (!csvRes.ok) throw new Error(`Failed to download CSV: ${csvRes.status}`);
+  return parseCSVNekt(await csvRes.text());
+}
+
+function parseCSVLineNekt(line: string): string[] {
+  const result: string[] = [];
+  let current = ""; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === "," && !inQuotes) { result.push(current.trim()); current = ""; }
+    else current += ch;
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseCSVNekt(csv: string): Record<string, string | null>[] {
+  const lines = csv.trim().split("\n");
+  if (lines.length < 2) return [];
+  const columns = parseCSVLineNekt(lines[0]).map((h) => h.trim().toLowerCase());
+  return lines.slice(1).map((line) => {
+    const values = parseCSVLineNekt(line);
+    const row: Record<string, string | null> = {};
+    for (let i = 0; i < columns.length; i++) {
+      const val = (values[i] ?? "").trim();
+      row[columns[i]] = val === "" || val === "null" || val === "NULL" ? null : val;
+    }
+    return row;
+  });
+}
+
+// ---- Mode: backfill-stage-entries (Nekt consolidated_deal_flow) ----
+// Populates reserva_entered_at (stage 152 = Aguardando Dados) and contrato_entered_at (stage 76 = Contrato)
+// com LAST timestamp por deal no SZS pipeline (14).
+async function syncBackfillStageEntries(nektApiKey: string, supabase: any) {
+  console.log(`syncBackfillStageEntries SZS: querying Nekt stage entries into 152/76...`);
+  const sql = `
+    SELECT CAST(item_id AS varchar) AS deal_id,
+           new_value AS stage,
+           MAX(log_time) AS entered_at
+    FROM nekt_trusted.pipedrive_v2_consolidated_deal_flow
+    WHERE field_key = 'stage_id' AND new_value IN ('152', '76')
+    GROUP BY item_id, new_value
+  `;
+  const rows = await queryNekt(nektApiKey, sql);
+  console.log(`  Nekt returned ${rows.length} stage-entry events`);
+
+  const dealMap = new Map<number, { reserva: string | null; contrato: string | null }>();
+  for (const r of rows) {
+    const dealId = parseInt(r.deal_id || "0");
+    if (!dealId) continue;
+    let entry = dealMap.get(dealId);
+    if (!entry) { entry = { reserva: null, contrato: null }; dealMap.set(dealId, entry); }
+    const ts = r.entered_at || null;
+    if (r.stage === "152") entry.reserva = ts;
+    else if (r.stage === "76") entry.contrato = ts;
+  }
+  console.log(`  Unique deals with stage entries: ${dealMap.size}`);
+
+  const updates = [...dealMap.entries()].map(([deal_id, v]) => ({
+    deal_id,
+    reserva_entered_at: v.reserva,
+    contrato_entered_at: v.contrato,
+  }));
+
+  let processed = 0, failed = 0;
+  const CONCURRENCY = 50;
+  for (let i = 0; i < updates.length; i += CONCURRENCY) {
+    const chunk = updates.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (u) => {
+      const patch: Record<string, string | null> = {};
+      if (u.reserva_entered_at) patch.reserva_entered_at = u.reserva_entered_at;
+      if (u.contrato_entered_at) patch.contrato_entered_at = u.contrato_entered_at;
+      if (Object.keys(patch).length === 0) return { ok: false };
+      const { error } = await supabase.from("szs_deals").update(patch).eq("deal_id", u.deal_id);
+      return { ok: !error };
+    }));
+    for (const r of results) { if (r.ok) processed++; else failed++; }
+  }
+  console.log(`  Updated ${processed}, failed ${failed}`);
+  return { processed, failed, total_events: rows.length, unique_deals: dealMap.size, done: true };
+}
+
 // ---- Deno.serve handler ----
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -858,6 +959,14 @@ Deno.serve(async (req) => {
       case "deals-flow":
         result = await syncDealsFlow(apiToken, supabase);
         break;
+      case "backfill-stage-entries": {
+        const { data: nektKey, error: nektErr } = await supabase.rpc("vault_read_secret", {
+          secret_name: "NEKT_API_KEY",
+        });
+        if (nektErr || !nektKey) throw new Error(`Vault error (NEKT_API_KEY): ${nektErr?.message}`);
+        result = await syncBackfillStageEntries(nektKey, supabase);
+        break;
+      }
       case "inspect-fields": {
         // Temporary: list deal fields matching a search term
         const search = (body.search || "source").toLowerCase();

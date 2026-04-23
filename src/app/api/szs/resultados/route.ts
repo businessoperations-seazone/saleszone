@@ -171,6 +171,8 @@ export async function GET(request: NextRequest) {
     const month = now.getMonth();
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
     const startDate = `${monthKey}-01`;
+    const nextMonthDateObj = new Date(year, month + 1, 1);
+    const mesFim = `${nextMonthDateObj.getFullYear()}-${String(nextMonthDateObj.getMonth() + 1).padStart(2, "0")}-01`;
 
     // ── Fetch active closer emails from squad_closer_rules (same logic as szs/ociosidade) ──
     const { data: closerRules } = await admin
@@ -766,35 +768,35 @@ export async function GET(request: NextRequest) {
       console.warn("[szs-resultados] Nekt indisponível para byStage override:", e);
     }
 
-    // Accumulated: deals that reached Ag.Dados (>=11) and Contrato (>=12) this month
-    // Count deals that were active in March (won/lost/open) and reached these stages
-    // 3 queries: open with mso>=11, won in March with mso>=11, lost in March with mso>=11
-    const [accumOpen, accumWon, accumLost] = await Promise.all([
+    // Reserva/Contrato do mês: deals que ENTRARAM na etapa Ag.Dados (152) / Contrato (76) no mês
+    // via reserva_entered_at / contrato_entered_at populado pelo Nekt consolidated_deal_flow.
+    const [reservaMesRows, contratoMesRows] = await Promise.all([
       paginate((o, ps) =>
-        admin.from("szs_deals").select("canal, max_stage_order, stage_order, lost_reason, empreendimento")
-          .eq("status", "open").range(o, o + ps - 1)
+        admin.from("szs_deals").select("canal, lost_reason, empreendimento")
+          .gte("reserva_entered_at", startDate)
+          .lt("reserva_entered_at", mesFim)
+          .range(o, o + ps - 1)
       ),
       paginate((o, ps) =>
-        admin.from("szs_deals").select("canal, max_stage_order, stage_order, lost_reason, empreendimento")
-          .eq("status", "won").gte("won_time", startDate).range(o, o + ps - 1)
-      ),
-      paginate((o, ps) =>
-        admin.from("szs_deals").select("canal, max_stage_order, stage_order, lost_reason, empreendimento")
-          .eq("status", "lost").gte("lost_time", startDate).range(o, o + ps - 1)
+        admin.from("szs_deals").select("canal, lost_reason, empreendimento")
+          .gte("contrato_entered_at", startDate)
+          .lt("contrato_entered_at", mesFim)
+          .range(o, o + ps - 1)
       ),
     ]);
     const accumData: Record<string, { agDados: number; contrato: number }> = {};
     for (const ch of CHANNEL_ORDER) accumData[ch] = { agDados: 0, contrato: 0 };
-    for (const d of [...accumOpen, ...accumWon, ...accumLost]) {
+    for (const d of reservaMesRows) {
       if (d.lost_reason && String(d.lost_reason).toLowerCase() === "duplicado/erro") continue;
       if (cityFilter && getCidadeGroup(d.empreendimento || "") !== cityFilter) continue;
-      const mso = d.max_stage_order || d.stage_order || 0;
       const canalGroup = getCanalGroup(String(d.canal || ""));
-      const tabs = getChannelTabs(canalGroup);
-      for (const tab of tabs) {
-        if (mso >= 11) accumData[tab].agDados++;
-        if (mso >= 12) accumData[tab].contrato++;
-      }
+      for (const tab of getChannelTabs(canalGroup)) accumData[tab].agDados++;
+    }
+    for (const d of contratoMesRows) {
+      if (d.lost_reason && String(d.lost_reason).toLowerCase() === "duplicado/erro") continue;
+      if (cityFilter && getCidadeGroup(d.empreendimento || "") !== cityFilter) continue;
+      const canalGroup = getCanalGroup(String(d.canal || ""));
+      for (const tab of getChannelTabs(canalGroup)) accumData[tab].contrato++;
     }
 
     // Ocupação agenda — duas fontes:
