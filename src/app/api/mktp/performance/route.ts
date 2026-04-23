@@ -157,11 +157,12 @@ export async function GET(request: Request) {
     }
 
     function countFunnel(dealList: DealRow[]) {
+      // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8).
       let mql = 0, sql = 0, opp = 0, won = 0;
       for (const d of dealList) {
         if (d.max_stage_order >= 2) mql++;
-        if (d.max_stage_order >= 5) sql++;
-        if (d.max_stage_order >= 9) opp++;
+        if (d.max_stage_order >= 4) sql++;
+        if (d.max_stage_order >= 8) opp++;
         if (d.status === "won") won++;
       }
       return { mql, sql, opp, won };

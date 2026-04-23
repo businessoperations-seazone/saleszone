@@ -104,9 +104,10 @@ export async function GET(req: NextRequest) {
       if (!empDaily[canalName]) empDaily[canalName] = {};
       if (!empDaily[canalName][dateStr]) empDaily[canalName][dateStr] = { mql: 0, sql: 0, opp: 0, won: 0 };
       const mso = d.max_stage_order || 0;
+      // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8)
       if (mso >= 2) empDaily[canalName][dateStr].mql += 1;
-      if (mso >= 5) empDaily[canalName][dateStr].sql += 1;
-      if (mso >= 9) empDaily[canalName][dateStr].opp += 1;
+      if (mso >= 4) empDaily[canalName][dateStr].sql += 1;
+      if (mso >= 8) empDaily[canalName][dateStr].opp += 1;
       if (d.status === "won") empDaily[canalName][dateStr].won += 1;
     }
 

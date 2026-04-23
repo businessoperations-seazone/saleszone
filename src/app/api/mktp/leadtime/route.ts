@@ -10,13 +10,14 @@ const V_COLS = mc.closers;
 
 export const dynamic = "force-dynamic";
 
+// MKTP pipeline (37) — 13 stages
 const STAGE_NAMES: Record<number, string> = {
-  1: "FUP Parceiro", 2: "Lead in", 3: "Contatados", 4: "Qualificação", 5: "Qualificado",
-  6: "Aguardando data", 7: "Agendado", 8: "No Show/Reagendamento", 9: "Reunião/OPP",
-  10: "FUP", 11: "Negociação", 12: "Fila de espera", 13: "Reservas", 14: "Contrato",
+  1: "Lead In", 2: "Contatados", 3: "Qualificação", 4: "Qualificado",
+  5: "Aguardando data", 6: "Reunião Agendada", 7: "No show", 8: "Reunião Realizada",
+  9: "FUP", 10: "Negociação", 11: "Proposta Aprovada", 12: "Reserva", 13: "Contrato",
 };
 
-const ALL_STAGES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+const ALL_STAGES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
 function getSquadId(closerName: string): number {
   for (const [sqId, indices] of Object.entries(mc.squadCloserMap)) {
@@ -92,7 +93,7 @@ export async function GET(request: NextRequest) {
       if (!d.add_time || !d.won_time) continue;
       const cycleDays = (new Date(d.won_time).getTime() - new Date(d.add_time).getTime()) / (1000 * 60 * 60 * 24);
       if (cycleDays <= 0) continue;
-      const maxSO = d.max_stage_order || 14;
+      const maxSO = d.max_stage_order || 13;
       let weightSum = 0;
       for (let s = 1; s <= maxSO; s++) weightSum += s;
       if (weightSum === 0) continue;

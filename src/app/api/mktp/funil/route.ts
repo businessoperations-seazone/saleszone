@@ -139,13 +139,13 @@ export async function GET(req: NextRequest) {
     for (const d of sqlDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 1, 0, 0, 0, 0); }
     for (const d of oppDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 1, 0, 0, 0); }
     for (const d of wonDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 0, 1, 0, 0); }
-    // Reserva (stage_order >= 13) / Contrato (stage_order >= 14) from all closed deals
+    // MKTP pipeline (37) tem 13 stages — Reserva = order 12, Contrato = order 13.
     const closedDeals = allDealsRes.filter(d => d.status === "won" || d.status === "lost");
     for (const d of closedDeals) {
       if (d.lost_reason === "Duplicado/Erro") continue;
       const mso = d.max_stage_order || 0;
-      if (mso >= 13) addToEmp(d.empreendimento, 0, 0, 0, 0, 1, 0);
-      if (mso >= 14) addToEmp(d.empreendimento, 0, 0, 0, 0, 0, 1);
+      if (mso >= 12) addToEmp(d.empreendimento, 0, 0, 0, 0, 1, 0);
+      if (mso >= 13) addToEmp(d.empreendimento, 0, 0, 0, 0, 0, 1);
     }
 
     // Agregar Meta Ads: max spend_month/leads_month por ad

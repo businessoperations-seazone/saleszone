@@ -364,9 +364,9 @@ export async function GET() {
         .range(o, o + ps - 1)
     );
 
-    // Stage thresholds: MQL>=1, SQL>=5, OPP>=9, Reserva>=12, Contrato>=13
+    // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8), Reserva (12), Contrato (13)
     const STAGES = ["mql", "sql", "opp", "reserva", "contrato"] as const;
-    const STAGE_MIN: Record<string, number> = { mql: 1, sql: 5, opp: 9, reserva: 12, contrato: 13 };
+    const STAGE_MIN: Record<string, number> = { mql: 2, sql: 4, opp: 8, reserva: 12, contrato: 13 };
 
     // Build date array for 90d window
     const allHistDates: string[] = [];

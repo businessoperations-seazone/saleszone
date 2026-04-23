@@ -43,7 +43,8 @@ export async function GET(req: NextRequest) {
           .range(o, o + ps - 1),
       );
 
-      const tabThreshold: Record<string, number> = { mql: 2, sql: 5, opp: 9, won: 14 };
+      // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8), WON=Contrato (13)
+      const tabThreshold: Record<string, number> = { mql: 2, sql: 4, opp: 8, won: 13 };
       const threshold = tabThreshold[tab] ?? 0;
       for (const d of rows) {
         if (d.lost_reason === "Duplicado/Erro") continue;
