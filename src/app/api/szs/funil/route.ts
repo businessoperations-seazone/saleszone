@@ -115,8 +115,9 @@ export async function GET(req: NextRequest) {
       fetchAll(admin.from("szs_deals").select("empreendimento, canal, max_stage_order, status, lost_reason").gte("add_time", startDate)),
       // Paid deals (canal=12, paid source) for funnel metrics
       fetchAll(admin.from("szs_deals").select("canal, max_stage_order, status, lost_reason").eq("canal", "12").ilike("rd_source", "%pag%").gte("add_time", startDate)),
-      // All form fills from baserow (leads, not qualified)
-      fetchAll(admin.from("baserow_szs_leads").select("cidade").gte("data_criacao_ads", startDate).lt("data_criacao_ads", mesFim)),
+      // All form fills from baserow (leads, not qualified). Graceful fallback se a tabela ausente (staging).
+      fetchAll(admin.from("baserow_szs_leads").select("cidade").gte("data_criacao_ads", startDate).lt("data_criacao_ads", mesFim))
+        .catch((err) => { console.warn("[szs/funil] baserow_szs_leads indisponível:", err?.message); return []; }),
     ]);
 
     // Count MQL/SQL/OPP/WON from szs_deals directly (not szs_daily_counts — avoids aggregation gap)
