@@ -79,6 +79,8 @@ export async function GET(req: NextRequest) {
     const month = now.getMonth();
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
     const startDate = `${monthKey}-01`;
+    const nextMonthDate = new Date(year, month + 1, 1);
+    const nextMonthStart = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, "0")}-01`;
 
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
@@ -176,32 +178,42 @@ export async function GET(req: NextRequest) {
     console.log(`[geral] channelCounts VD: mql=${channelCounts["Vendas Diretas"].mql}, sql=${channelCounts["Vendas Diretas"].sql}, opp=${channelCounts["Vendas Diretas"].opp}, won=${channelCounts["Vendas Diretas"].won}`);
     console.log(`[geral] channelCounts Parceiros: mql=${channelCounts.Parceiros.mql}, sql=${channelCounts.Parceiros.sql}, opp=${channelCounts.Parceiros.opp}, won=${channelCounts.Parceiros.won}`);
 
-    // ── 2. Reserva/Contrato acumulado from squad_deals (stage-based, não date-based) ──
-    const deals = await paginate((o, ps) =>
-      admin
-        .from("squad_deals")
-        .select("canal, max_stage_order, stage_order, status, lost_reason, won_time")
-        .not("empreendimento", "is", null)
-        .or(`status.eq.open,won_time.gte.${startDate},lost_time.gte.${startDate},add_time.gte.${startDate}`)
-        .range(o, o + ps - 1),
-    );
-    console.log(`[geral] squad_deals returned ${deals.length} deals (for reserva/contrato)`);
+    // ── 2. Reserva/Contrato por data de entrada na etapa (match Pipedrive "data de entrada na etapa") ──
+    const [reservaDeals, contratoDeals] = await Promise.all([
+      paginate((o, ps) =>
+        admin
+          .from("squad_deals")
+          .select("canal, lost_reason")
+          .not("empreendimento", "is", null)
+          .gte("reserva_entered_at", startDate)
+          .lt("reserva_entered_at", nextMonthStart)
+          .range(o, o + ps - 1),
+      ),
+      paginate((o, ps) =>
+        admin
+          .from("squad_deals")
+          .select("canal, lost_reason")
+          .not("empreendimento", "is", null)
+          .gte("contrato_entered_at", startDate)
+          .lt("contrato_entered_at", nextMonthStart)
+          .range(o, o + ps - 1),
+      ),
+    ]);
+    console.log(`[geral] reservaDeals=${reservaDeals.length} contratoDeals=${contratoDeals.length}`);
 
-    for (const d of deals) {
+    for (const d of reservaDeals) {
       if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = d.max_stage_order ?? d.stage_order ?? 0;
       const macro = getMacroChannel(d.canal);
-      // Reserva/Contrato acumulado (stage-based) — todos os canais no Geral
-      if (mso >= TH_RESERVA) channelCounts.Geral.reserva++;
-      if (mso >= TH_CONTRATO) channelCounts.Geral.contrato++;
-      if (macro === "Parceiros") {
-        if (mso >= TH_RESERVA) channelCounts.Parceiros.reserva++;
-        if (mso >= TH_CONTRATO) channelCounts.Parceiros.contrato++;
-      }
-      if (macro === "Vendas Diretas") {
-        if (mso >= TH_RESERVA) channelCounts["Vendas Diretas"].reserva++;
-        if (mso >= TH_CONTRATO) channelCounts["Vendas Diretas"].contrato++;
-      }
+      channelCounts.Geral.reserva++;
+      if (macro === "Parceiros") channelCounts.Parceiros.reserva++;
+      if (macro === "Vendas Diretas") channelCounts["Vendas Diretas"].reserva++;
+    }
+    for (const d of contratoDeals) {
+      if (d.lost_reason === "Duplicado/Erro") continue;
+      const macro = getMacroChannel(d.canal);
+      channelCounts.Geral.contrato++;
+      if (macro === "Parceiros") channelCounts.Parceiros.contrato++;
+      if (macro === "Vendas Diretas") channelCounts["Vendas Diretas"].contrato++;
     }
 
     // ── 3. Previous month WON ──
