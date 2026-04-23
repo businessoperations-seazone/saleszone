@@ -1,7 +1,7 @@
-// Verificação dos leads de Landing Pages (Elementor Forms).
-// Paralela ao audit-mql mas mais simples:
-//   - Não tem SLA de campanha (LPs são sempre válidas, sem filtro por mql_intencoes)
-//   - Não tem Baserow (cadastros de LP só vão pro Pipedrive via n8n)
+// Verificação dos leads de Landing Pages (JetEngine Forms).
+// Paralela ao audit-mql:
+//   - Não tem SLA de campanha (LPs são sempre válidas)
+//   - Baserow verificado por email (LP não tem leadgen_id)
 //   - Tem captura de erro MIA (mesmo shape do audit-mql)
 
 import {
@@ -9,6 +9,7 @@ import {
   acquireLock,
   releaseLock,
 } from "@/lib/audit-mql"
+import { createSquadSupabaseAdmin } from "@/lib/squad/supabase"
 import {
   LpLeadRecord,
   readLpLeads,
@@ -20,9 +21,87 @@ const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 const SLACK_WEBHOOK    = process.env.SLACK_WEBHOOK_AUDIT_MQL    || ""
 
+// Notificações Slack para LP desativadas temporariamente — reativar quando fluxo estiver validado
+const LP_SLACK_ENABLED = false
+
 const FIVE_MINUTES      = 5  * 60 * 1000
 const FOUR_HOURS        = 4  * 60 * 60 * 1000
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
+
+// ─── Baserow (LP) ─────────────────────────────────────────────────────────────
+// Mesmas tabelas do audit-mql, mas match por email (LP não tem leadgen_id).
+// Confirmar o nome exato do campo email em cada tabela no Baserow.
+const BASEROW_API = "https://api-baserow.seazone.com.br"
+const BASEROW_LP_TABLES: Record<string, { tableId: number; emailField: string }> = {
+  Investimentos: { tableId: 1208, emailField: "Email" },
+  Marketplace:   { tableId: 1330, emailField: "Email" },
+  "Serviços":    { tableId: 1337, emailField: "Email" },
+}
+
+let _baserowToken: string | null = null
+async function getBaserowToken(): Promise<string | null> {
+  if (_baserowToken) return _baserowToken
+  try {
+    const admin = createSquadSupabaseAdmin()
+    const { data } = await admin.rpc("vault_read_secret", { secret_name: "BASEROW_TOKEN" })
+    if (data) _baserowToken = data
+    return data || null
+  } catch { return null }
+}
+
+export async function enrichBaserowLp(leads: LpLeadRecord[]): Promise<boolean> {
+  const now = Date.now()
+  const TWO_MIN = 2 * 60 * 1000
+  const toCheck = leads.filter(l => {
+    if (l.status === "descartado") return false
+    if (!BASEROW_LP_TABLES[l.vertical]) return false
+    if (!l.email) return false
+    const age = now - new Date(l.created_at).getTime()
+    if (age < TWO_MIN) return false
+    if (l.in_baserow === undefined) return true
+    if (l.in_baserow === false) return true
+    return false
+  })
+  if (!toCheck.length) return false
+
+  const token = await getBaserowToken()
+  if (!token) return false
+
+  try {
+    const byVertical = new Map<string, LpLeadRecord[]>()
+    for (const lead of toCheck) {
+      if (!byVertical.has(lead.vertical)) byVertical.set(lead.vertical, [])
+      byVertical.get(lead.vertical)!.push(lead)
+    }
+
+    let changed = false
+    for (const [vertical, vLeads] of byVertical) {
+      const cfg = BASEROW_LP_TABLES[vertical]
+      if (!cfg) continue
+      const results = await Promise.all(
+        vLeads.map(async (lead) => {
+          try {
+            const url = `${BASEROW_API}/api/database/rows/table/${cfg.tableId}/` +
+              `?user_field_names=true&size=1&filter__${encodeURIComponent(cfg.emailField)}__equal=${encodeURIComponent(lead.email)}`
+            const res = await fetch(url, {
+              headers: { Authorization: `Token ${token}` },
+              cache: "no-store",
+            })
+            if (!res.ok) return { id: lead.id, found: false }
+            const data = await res.json()
+            return { id: lead.id, found: (data.count || 0) > 0 }
+          } catch { return { id: lead.id, found: false } }
+        })
+      )
+      const foundSet = new Set(results.filter(r => r.found).map(r => r.id))
+      for (const lead of vLeads) {
+        lead.in_baserow = foundSet.has(lead.id)
+        changed = true
+      }
+    }
+    return changed
+  } catch { return false }
+}
 
 // ─── Pipedrive lookup ─────────────────────────────────────────────────────────
 // TODO: extrair pdFetch, findPerson, getLatestDeal, parseMiaMotivo,
@@ -159,7 +238,7 @@ export async function fetchMiaErrorFromPipedrive(dealId: number): Promise<MiaErr
 // ─── Slack notify ─────────────────────────────────────────────────────────────
 
 async function notifyLp(lead: LpLeadRecord, key: string, problem: "sem_pipedrive" | "sem_mia") {
-  if (!SLACK_WEBHOOK || lead.notified) return
+  if (!LP_SLACK_ENABLED || !SLACK_WEBHOOK || lead.notified) return
 
   const lockPath = `audit-lp/locks/${key}/${lead.id}.lock`
   const got = await acquireLock(lockPath)
@@ -246,6 +325,9 @@ export async function runCheckLp(key: string): Promise<{ checked: number; resolv
     pending.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
     const batch = pending.slice(0, 30)
 
+    // Baserow em paralelo com o loop principal
+    enrichBaserowLp(leads).catch(e => console.error("[audit-lp-check] baserow error:", e))
+
     let resolved = 0
     for (const lead of batch) {
       lead.checked_at = new Date().toISOString()
@@ -324,7 +406,7 @@ export async function runCheckLp(key: string): Promise<{ checked: number; resolv
     return { checked: batch.length, resolved }
   } catch (err) {
     console.error(`[audit-lp-check] runCheckLp(${key}) error:`, err)
-    if (SLACK_WEBHOOK) {
+    if (LP_SLACK_ENABLED && SLACK_WEBHOOK) {
       await fetch(SLACK_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
