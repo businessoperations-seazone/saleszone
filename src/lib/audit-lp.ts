@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob"
+import { putBlob, fetchBlobJson } from "@/lib/blob"
 import { MiaErrorInfo } from "@/lib/audit-mql"
 
 // Lead vindo de Landing Page WordPress via Elementor Forms → webhook saleszone
@@ -85,9 +85,7 @@ export function extractLpVertical(formName: string, pageSlug: string): string {
   return "Outros"
 }
 
-// ─── Storage (Vercel Blob) ────────────────────────────────────────────────────
-
-const BLOB_STORE_URL = process.env.BLOB_URL || ""
+// ─── Storage (Supabase Storage via @/lib/blob) ────────────────────────────────
 
 export function lpDateKey(date?: Date): string {
   const d = date || new Date()
@@ -96,27 +94,12 @@ export function lpDateKey(date?: Date): string {
 }
 
 export async function readLpLeads(key: string): Promise<LpLeadRecord[]> {
-  if (!BLOB_STORE_URL) return []
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
-  try {
-    const res = await fetch(`${BLOB_STORE_URL}/audit-lp/${key}.json`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) return []
-    return await res.json()
-  } catch {
-    return []
-  }
+  const d = await fetchBlobJson<LpLeadRecord[]>(`audit-lp/${key}.json`)
+  return d ?? []
 }
 
 export async function writeLpLeads(key: string, leads: LpLeadRecord[]) {
-  await put(`audit-lp/${key}.json`, JSON.stringify(leads), {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  })
+  await putBlob(`audit-lp/${key}.json`, leads)
 }
 
 // Dedup: mesmo email+phone no mesmo dia é tratado como o mesmo lead

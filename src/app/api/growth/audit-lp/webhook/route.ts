@@ -9,7 +9,6 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
-import { waitUntil } from "@vercel/functions"
 import {
   LpLeadRecord,
   lpDateKey,
@@ -156,11 +155,12 @@ export async function POST(req: NextRequest) {
 
   const saved = await appendLpLeadSafe(lpDateKey(), record)
 
-  // Se salvou novo lead: em background, espera 5 min e aciona check
+  // Se salvou novo lead: em background, espera 5 min e aciona check.
+  // Node runtime (Coolify): fire-and-forget. maxDuration=480 segura o processo.
   if (saved) {
     const host = req.headers.get("host") || "saleszone.vercel.app"
     const baseUrl = `https://${host}`
-    waitUntil(delayedCheck(baseUrl))
+    delayedCheck(baseUrl).catch(err => console.error("[audit-lp] delayedCheck:", err))
   }
 
   return NextResponse.json({ ok: true, saved, id: record.id })

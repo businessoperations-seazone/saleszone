@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob"
+import { putBlob, fetchBlobJson } from "@/lib/blob"
 
 export interface AuditCTWPPLead {
   deal_id: number
@@ -41,9 +41,7 @@ export const SZI_STAGES: Record<number, string> = {
   392: "FUP Parceiro",
 }
 
-// ─── Blob helpers ─────────────────────────────────────────────────────────────
-
-const BLOB_STORE_URL = process.env.BLOB_URL || "https://r7yanltnwvovfvzj.private.blob.vercel-storage.com"
+// ─── Blob helpers (Supabase Storage via @/lib/blob) ───────────────────────────
 
 export function dateKeyBRT(date?: Date): string {
   const d = date || new Date()
@@ -52,24 +50,9 @@ export function dateKeyBRT(date?: Date): string {
 }
 
 export async function readAuditCTWPP(key: string): Promise<AuditCTWPPDay | null> {
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
-  try {
-    const res = await fetch(`${BLOB_STORE_URL}/audit-ctwpp/${key}.json`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
-  }
+  return await fetchBlobJson<AuditCTWPPDay>(`audit-ctwpp/${key}.json`)
 }
 
 export async function writeAuditCTWPP(key: string, data: AuditCTWPPDay) {
-  await put(`audit-ctwpp/${key}.json`, JSON.stringify(data), {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  })
+  await putBlob(`audit-ctwpp/${key}.json`, data)
 }

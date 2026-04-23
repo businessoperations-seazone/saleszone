@@ -1,4 +1,4 @@
-import { put, del } from "@vercel/blob"
+import { putBlob, fetchBlobJson, casAcquireBlob, deleteBlob } from "@/lib/blob"
 
 export interface MiaErrorInfo {
   motivo_parsed: string        // label humano ex "Número de telefone inválido"
@@ -42,8 +42,6 @@ export function extractVertical(campaignName: string): string {
   return "Outros"
 }
 
-const BLOB_STORE_URL = process.env.BLOB_URL || ""
-
 export function dateKey(date?: Date): string {
   const d = date || new Date()
   // BRT = UTC-3
@@ -52,27 +50,12 @@ export function dateKey(date?: Date): string {
 }
 
 export async function readLeads(key: string): Promise<LeadRecord[]> {
-  if (!BLOB_STORE_URL) return []
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
-  try {
-    const res = await fetch(`${BLOB_STORE_URL}/audit-mql/${key}.json`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) return []
-    return await res.json()
-  } catch {
-    return []
-  }
+  const d = await fetchBlobJson<LeadRecord[]>(`audit-mql/${key}.json`)
+  return d ?? []
 }
 
 export async function writeLeads(key: string, leads: LeadRecord[]) {
-  await put(`audit-mql/${key}.json`, JSON.stringify(leads), {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  })
+  await putBlob(`audit-mql/${key}.json`, leads)
 }
 
 // Append seguro contra race condition: read → dedup → write → verify → retry
@@ -95,34 +78,19 @@ export async function appendLeadSafe(key: string, record: LeadRecord, retries = 
   return false
 }
 
-// ─── Lock atômico via Vercel Blob ─────────────────────────────────────────────
-// Usa `allowOverwrite: false` como CAS real — o put só sucede se o path ainda
-// não existir no Blob Store. Primeira tentativa vence, concorrentes recebem erro
-// e skipam o envio Slack. Sem TTL automático no Blob: orphan locks (crash após
-// acquire e antes do release) prendem o lead, mas o merge monotônico de
-// `notified=true` em runCheck garante que não duplica de qualquer forma.
+// ─── Lock atômico via Supabase Storage ────────────────────────────────────────
+// casAcquireBlob usa upsert:false → upload só sucede se o path ainda não existir.
+// Primeira tentativa vence, concorrentes recebem erro e skipam o envio Slack.
+// Orphan locks (crash entre acquire e release) prendem o lead, mas o merge
+// monotônico de `notified=true` em runCheck garante que não duplica.
 
 export async function acquireLock(lockPath: string): Promise<boolean> {
-  try {
-    await put(lockPath, new Date().toISOString(), {
-      access: "private",
-      addRandomSuffix: false,
-      allowOverwrite: false,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-    })
-    return true
-  } catch {
-    // Já existe (ou erro de rede) → outro processo tem o lock
-    return false
-  }
+  return await casAcquireBlob(lockPath, new Date().toISOString())
 }
 
 export async function releaseLock(lockPath: string): Promise<void> {
-  if (!process.env.BLOB_URL) return
   try {
-    await del(`${process.env.BLOB_URL}/${lockPath}`, {
-      token: process.env.BLOB_READ_WRITE_TOKEN,
-    })
+    await deleteBlob(lockPath)
   } catch {
     // Ignora — lock vai ficar orfão mas merge monotônico protege contra duplicata
   }
