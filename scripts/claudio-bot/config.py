@@ -124,13 +124,13 @@ TEAM_MAP = {
 # ─────────────────────────────────────────────────────────────
 # GESTORES POR PIPELINE (quem recebe @mention na msg principal)
 # pv = gestor de pre-vendas, vendas = gestor de vendas
-# cc = mencao extra (opcional, so SZS tem)
+# cc = mencao extra (opcional)
 # ─────────────────────────────────────────────────────────────
 MANAGERS = {
-    "SZS":   {"pv": "U081JARBRGX", "vendas": "U0ADF45MW2Z", "cc": "U05HFS5NFL1"},
-    "DECOR": {"pv": "U0A5TKF4Q1M", "vendas": "U0A5TKF4Q1M"},
-    "SZI":   {"pv": "U07V3CS5HFV", "vendas": "U01DC6N6H2N"},
-    "MKT":   {"pv": "U0AG3C6JU77", "vendas": "U0AG3C6JU77"},
+    "SZS":   {"pv": "U081JARBRGX", "vendas": "U0ADF45MW2Z"},  # Kamille / Mayara
+    "DECOR": {"pv": "U081JARBRGX", "vendas": "U0ADF45MW2Z"},  # Kamille / Mayara
+    "SZI":   {"pv": "U01DC6N6H2N", "vendas": "U01DC6N6H2N"},  # Pamella / Pamella
+    "MKT":   {"pv": "U0AG3C6JU77", "vendas": "U0AG3C6JU77"},  # Roberto / Roberto
 }
 
 # ─────────────────────────────────────────────────────────────

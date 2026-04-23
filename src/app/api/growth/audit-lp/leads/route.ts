@@ -12,6 +12,8 @@ const PIPEDRIVE_TOKEN  = process.env.PIPEDRIVE_API_TOKEN        || ""
 const PIPEDRIVE_DOMAIN = process.env.PIPEDRIVE_COMPANY_DOMAIN   || "seazone"
 const MIA_FIELD_KEY    = process.env.PIPEDRIVE_MORADA_FIELD_KEY || "3dda4dab1781dcfd8839a5fd6c0b7d5e7acfbcfc"
 
+// TODO: extrair pdFetch, findPerson, getLatestDeal para src/lib/pipedrive-helpers.ts
+// — duplicados em audit-lp-check.ts e audit-mql-check.ts.
 async function pdFetch(url: string) {
   const res = await fetch(url, { cache: "no-store" })
   if (!res.ok) return null
@@ -59,12 +61,18 @@ async function getLatestDeal(personId: number): Promise<{ deal_id: number; mia_l
 }
 
 async function recheckOne(lead: LpLeadRecord): Promise<void> {
+  // Transição entre categorias de status (ok ↔ sem_pipedrive ↔ sem_mia) zera
+  // `notified` para permitir novo Slack. Transição dentro da mesma categoria
+  // preserva `notified` para evitar spam.
+  const prevStatus = lead.status
+
   lead.checked_at = new Date().toISOString()
   const personId = await findPerson(lead.email, lead.phone)
   if (!personId) {
     lead.status = "sem_pipedrive"
     lead.pipedrive_deal_id = undefined
     lead.mia_link = undefined
+    if (prevStatus !== "sem_pipedrive") lead.notified = false
     return
   }
   lead.pipedrive_person_id = personId
@@ -73,6 +81,7 @@ async function recheckOne(lead: LpLeadRecord): Promise<void> {
     lead.status = "sem_pipedrive"
     lead.pipedrive_deal_id = undefined
     lead.mia_link = undefined
+    if (prevStatus !== "sem_pipedrive") lead.notified = false
     return
   }
   lead.pipedrive_deal_id = deal.deal_id
@@ -86,10 +95,12 @@ async function recheckOne(lead: LpLeadRecord): Promise<void> {
       const err = await fetchMiaErrorFromPipedrive(deal.deal_id)
       if (err) lead.mia_error = err
     }
+    if (prevStatus !== "sem_mia") lead.notified = false
   } else {
     lead.status = "ok"
     lead.mia_link = deal.mia_link
     lead.mia_error = undefined
+    if (prevStatus !== "ok") lead.notified = false
   }
 }
 

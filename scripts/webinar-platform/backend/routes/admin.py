@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, make_response
 import supabase_client as db
 from auth import require_admin
+from services import webinar_fup
 
 bp = Blueprint("admin", __name__)
 
@@ -117,6 +118,51 @@ def list_registrations(session_id):
         order="created_at.asc"
     ) or []
     return jsonify(regs), 200
+
+
+# ──────────────────────────────────────────────────────────
+# Update a registration (admin)
+# ──────────────────────────────────────────────────────────
+
+ALLOWED_UPDATE_FIELDS = {
+    "status", "is_opportunity",
+    "no_show_at", "observacoes", "cidade", "tipo_imovel",
+    "converted", "converted_at",
+}
+
+
+@bp.route("/registrations/<reg_id>", methods=["PATCH"])
+def update_registration(reg_id):
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "Body vazio"}), 400
+
+    payload = {k: v for k, v in data.items() if k in ALLOWED_UPDATE_FIELDS}
+    if not payload:
+        return jsonify({"error": "Nenhum campo válido no body"}), 400
+
+    if payload.get("is_opportunity") is True:
+        payload.setdefault("opportunity_marked_at", datetime.now(timezone.utc).isoformat())
+
+    before_rows = db.select("webinar_registrations", filters={"id": f"eq.{reg_id}"}) or []
+    if not before_rows:
+        return jsonify({"error": "Registration não encontrada"}), 404
+    previous = before_rows[0]
+
+    result = db.update(
+        "webinar_registrations",
+        filters={"id": f"eq.{reg_id}"},
+        data=payload,
+    )
+    updated = result[0] if result else {**previous, **payload}
+
+    try:
+        sid = updated.get("session_id") or previous.get("session_id")
+        webinar_fup.handle_patch_update(previous, updated, sid)
+    except Exception as e:
+        print(f"[admin] webinar_fup hook failed: {e}")
+
+    return jsonify(updated), 200
 
 
 # ──────────────────────────────────────────────────────────

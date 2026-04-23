@@ -31,7 +31,6 @@ export async function GET() {
         .from("szs_deals")
         .select("empreendimento, canal, owner_name, preseller_name, lost_reason")
         .eq("status", "open")
-        .not("empreendimento", "is", null)
         .range(o, o + ps - 1)
     );
 

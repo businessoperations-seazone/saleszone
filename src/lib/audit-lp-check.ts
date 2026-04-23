@@ -25,6 +25,9 @@ const FOUR_HOURS        = 4  * 60 * 60 * 1000
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000
 
 // ─── Pipedrive lookup ─────────────────────────────────────────────────────────
+// TODO: extrair pdFetch, findPerson, getLatestDeal, parseMiaMotivo,
+// parseMiaErrorNote e fetchMiaErrorFromPipedrive para src/lib/pipedrive-helpers.ts
+// — duplicados em audit-mql-check.ts e src/app/api/growth/audit-lp/leads/route.ts.
 
 async function pdFetch(url: string) {
   const res = await fetch(url, { cache: "no-store" })
@@ -33,33 +36,51 @@ async function pdFetch(url: string) {
 }
 
 async function findPerson(email: string, phone: string): Promise<number | null> {
+  // Dispara email, phone e phone-sem-55 em paralelo; devolve o primeiro id encontrado
+  // na ordem de prioridade (email > phone > phone-sem-55).
+  const clean = phone ? phone.replace(/\D/g, "") : ""
+  const sem55 = clean.startsWith("55") && clean.length === 13 ? clean.slice(2) : ""
+
+  const lookups: Array<Promise<number | null>> = []
+
   if (email) {
-    const data = await pdFetch(
-      `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/persons/search` +
-      `?term=${encodeURIComponent(email)}&fields=email&exact_match=true&api_token=${PIPEDRIVE_TOKEN}`
+    lookups.push(
+      pdFetch(
+        `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/persons/search` +
+        `?term=${encodeURIComponent(email)}&fields=email&exact_match=true&api_token=${PIPEDRIVE_TOKEN}`
+      ).then(d => (d?.data?.items?.[0]?.item?.id as number | undefined) ?? null)
+       .catch(() => null)
     )
-    const id = data?.data?.items?.[0]?.item?.id as number | undefined
-    if (id) return id
+  } else {
+    lookups.push(Promise.resolve(null))
   }
-  if (phone) {
-    const clean = phone.replace(/\D/g, "")
-    const data1 = await pdFetch(
-      `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/persons/search` +
-      `?term=${encodeURIComponent(clean)}&fields=phone&exact_match=true&api_token=${PIPEDRIVE_TOKEN}`
+
+  if (clean) {
+    lookups.push(
+      pdFetch(
+        `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/persons/search` +
+        `?term=${encodeURIComponent(clean)}&fields=phone&exact_match=true&api_token=${PIPEDRIVE_TOKEN}`
+      ).then(d => (d?.data?.items?.[0]?.item?.id as number | undefined) ?? null)
+       .catch(() => null)
     )
-    const id1 = data1?.data?.items?.[0]?.item?.id as number | undefined
-    if (id1) return id1
-    if (clean.startsWith("55") && clean.length === 13) {
-      const sem55 = clean.slice(2)
-      const data2 = await pdFetch(
+  } else {
+    lookups.push(Promise.resolve(null))
+  }
+
+  if (sem55) {
+    lookups.push(
+      pdFetch(
         `https://${PIPEDRIVE_DOMAIN}.pipedrive.com/v1/persons/search` +
         `?term=${encodeURIComponent(sem55)}&fields=phone&exact_match=true&api_token=${PIPEDRIVE_TOKEN}`
-      )
-      const id2 = data2?.data?.items?.[0]?.item?.id as number | undefined
-      if (id2) return id2
-    }
+      ).then(d => (d?.data?.items?.[0]?.item?.id as number | undefined) ?? null)
+       .catch(() => null)
+    )
+  } else {
+    lookups.push(Promise.resolve(null))
   }
-  return null
+
+  const [idEmail, idPhone, idPhoneSem55] = await Promise.all(lookups)
+  return idEmail ?? idPhone ?? idPhoneSem55 ?? null
 }
 
 async function getLatestDeal(personId: number): Promise<{ deal_id: number; mia_link: string | null } | null> {
@@ -260,7 +281,11 @@ export async function runCheckLp(key: string): Promise<{ checked: number; resolv
         } else {
           lead.mia_link = deal.mia_link
           lead.status = "ok"
-          lead.notified = true
+          // Lead acabou de virar "ok" (o branch `if (lead.status === "ok") continue`
+          // acima garante que ele não estava OK antes). Zera `notified` para que
+          // uma regressão futura (deal volta a falhar) dispare novo Slack.
+          lead.notified = false
+          lead.mia_error = undefined
           resolved++
         }
       }
@@ -278,9 +303,16 @@ export async function runCheckLp(key: string): Promise<{ checked: number; resolv
         finalLeads.push(f)
         continue
       }
+      // Merge monotônico de `notified`: mantém `true` se fresh já tem, EXCETO
+      // quando o lead voltou a "ok" — nesse caso respeitamos o reset feito
+      // acima para permitir novo alerta em regressão futura.
+      const notifiedMerged =
+        processed.status === "ok"
+          ? processed.notified
+          : (f.notified === true ? true : processed.notified)
       finalLeads.push({
         ...processed,
-        notified: f.notified === true ? true : processed.notified,
+        notified: notifiedMerged,
       })
     }
     for (const [id, p] of pendingMap) {

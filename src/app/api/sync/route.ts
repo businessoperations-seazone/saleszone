@@ -34,10 +34,11 @@ const FUNCTION_MAP: Record<string, Array<{ name: string; body?: Record<string, u
     { name: "sync-squad-deals", body: { mode: "deals-lost" } },
     { name: "sync-squad-deals", body: { mode: "deals-flow" } },
   ],
-  // Light deals: skip deals-lost (pesado, batched 5000) e deals-flow (500/batch, timeout). Cron cuida.
+  // Light deals: inclui deals-lost com cutoff 30d (só perdidos recentes, evita timeout dos 58k+). deals-flow ainda pulado.
   "deals-light": [
     { name: "sync-squad-deals", body: { mode: "deals-open" } },
     { name: "sync-squad-deals", body: { mode: "deals-won" } },
+    { name: "sync-squad-deals", body: { mode: "deals-lost", cutoff_days: 30 } },
   ],
   // --- MKTP (Marketplace) sync functions ---
   "mktp-dashboard": [

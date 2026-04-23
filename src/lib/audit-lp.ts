@@ -89,8 +89,9 @@ export function extractLpVertical(formName: string, pageSlug: string): string {
 
 export function lpDateKey(date?: Date): string {
   const d = date || new Date()
-  const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000) // BRT = UTC-3
-  return brt.toISOString().slice(0, 10)
+  // Usa API nativa de timezone — robusta a mudanças de horário de verão e
+  // alterações futuras do fuso. sv-SE formato: "YYYY-MM-DD HH:mm:ss".
+  return d.toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10)
 }
 
 export async function readLpLeads(key: string): Promise<LpLeadRecord[]> {

@@ -1,0 +1,46 @@
+Deployed Functions on project gamswizeexihaymfweeq: sync-baserow-forms
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-baserow-leads
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-decor-calendar
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-decor-dashboard
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-decor-deals
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-decor-presales
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-mktp-calendar
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-mktp-dashboard
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-mktp-deals
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-mktp-meta-ads
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-mktp-presales
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-pipedrive-snapshot
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-squad-calendar
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-squad-dashboard
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-squad-deals
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-squad-meta-ads
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+unexpected deploy status 400: {"message":"Failed to bundle the function (reason: The module's source code could not be parsed: Expression expected at file:///tmp/user_fn_gamswizeexihaymfweeq_31826562-bd87-4624-b76a-d694a5b47cc6_3/source/supabase/functions/sync-squad-mia-cadencia/index.ts:267:69\n\n      const __body = await req: Request.clone().json().catch(() => ({}));\n                                                                      ~)."}
+Try rerunning the command with --debug to troubleshoot the error.
+Deployed Functions on project gamswizeexihaymfweeq: sync-squad-presales
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-szs-calendar
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-szs-dashboard
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-szs-deals
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-szs-meta-ads
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions
+Deployed Functions on project gamswizeexihaymfweeq: sync-szs-presales
+You can inspect your deployment in the Dashboard: https://supabase.com/dashboard/project/gamswizeexihaymfweeq/functions

@@ -305,12 +305,12 @@ function ChannelCard({ channel }: { channel: ChannelResult }) {
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Reserva</div>
           <div style={{ fontSize: 28, fontWeight: 700, color: "#fbbf24" }}>{fmtNum(snapshots.aguardandoDados)}</div>
-          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{name === "Funil Completo" ? "acumulado no mês" : "em aberto"}</div>
+          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>em aberto</div>
         </div>
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Em Contrato</div>
           <div style={{ fontSize: 28, fontWeight: 700, color: "#22c55e" }}>{fmtNum(snapshots.emContrato)}</div>
-          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>{name === "Funil Completo" ? "acumulado no mês" : "em aberto"}</div>
+          <div style={{ fontSize: 11, color: T.cinza400, marginTop: 4 }}>em aberto</div>
         </div>
         <div style={{ padding: "14px 16px", background: T.card, borderRadius: 8, border: `1px solid ${T.border}`, textAlign: "center" }}>
           <div style={{ fontSize: 10, color: T.cinza600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Ocupação Agenda</div>

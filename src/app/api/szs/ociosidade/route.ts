@@ -63,15 +63,16 @@ export async function GET() {
     // Only keep emails that match mc.closers (excludes Samuel, Maria Vitória)
     const closerNorm = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const configClosers = mc.closers.map(closerNorm);
-    const emails = [...new Set(
-      rules
-        .filter((r) => {
-          // Match email prefix (e.g. "gabriela.lemos") against closer names
-          const prefix = r.email.split("@")[0].replace(".", " ");
-          return configClosers.some((c) => c.includes(closerNorm(prefix)) || closerNorm(prefix).includes(c.split(" ")[0]));
-        })
-        .map((r) => r.email)
-    )];
+    // Emails originais (para query Supabase que faz match case-sensitive)
+    const rawMatchedEmails = rules
+      .filter((r) => {
+        // Match email prefix (e.g. "gabriela.lemos") against closer names
+        const prefix = r.email.split("@")[0].replace(".", " ");
+        return configClosers.some((c) => c.includes(closerNorm(prefix)) || closerNorm(prefix).includes(c.split(" ")[0]));
+      })
+      .map((r) => r.email);
+    // Emails deduplicados por forma normalizada (lowercase + trim)
+    const emails = [...new Set(rawMatchedEmails.map((e) => e.toLowerCase().trim()))];
 
     // 2. Date window
     const today = new Date();
@@ -82,11 +83,11 @@ export async function GET() {
     const windowEnd = new Date(today);
     windowEnd.setDate(windowEnd.getDate() + 20);
 
-    // 3. Query ALL events
+    // 3. Query ALL events — usa emails originais (case-sensitive) para não perder registros
     const { data: events, error: evtErr } = await supabase
       .from("szs_calendar_events")
       .select("closer_email, closer_name, dia, duracao_min, cancelou")
-      .in("closer_email", emails)
+      .in("closer_email", [...new Set(rawMatchedEmails)])
       .gte("dia", formatDate(windowStart))
       .lte("dia", formatDate(windowEnd));
 
@@ -97,7 +98,8 @@ export async function GET() {
     for (const e of emails) agg.set(e, new Map());
 
     for (const evt of events || []) {
-      const emailMap = agg.get(evt.closer_email);
+      const normEmail = (evt.closer_email || "").toLowerCase().trim();
+      const emailMap = agg.get(normEmail);
       if (!emailMap) continue;
       const existing = emailMap.get(evt.dia) || { totalMin: 0, count: 0, cancelledCount: 0, totalScheduled: 0 };
       existing.totalScheduled += 1;
@@ -150,8 +152,9 @@ export async function GET() {
 
     const nameMap = new Map<string, string>();
     for (const evt of events || []) {
-      if (evt.closer_name && !nameMap.has(evt.closer_email)) {
-        nameMap.set(evt.closer_email, evt.closer_name);
+      const normEmail = (evt.closer_email || "").toLowerCase().trim();
+      if (evt.closer_name && !nameMap.has(normEmail)) {
+        nameMap.set(normEmail, evt.closer_name);
       }
     }
 

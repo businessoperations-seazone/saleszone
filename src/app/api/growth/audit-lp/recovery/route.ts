@@ -94,6 +94,22 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const date: string = body.date || lpDateKey()
 
+  // Sem PIPEDRIVE_LP_FILTER_IDS o recovery é ineficaz — alerta no Slack
+  // para forçar configuração (antes passava silenciosamente com log no stdout)
+  if (!process.env.PIPEDRIVE_LP_FILTER_IDS) {
+    const slackWebhook = process.env.SLACK_WEBHOOK_AUDIT_MQL || process.env.SLACK_WEBHOOK
+    if (slackWebhook) {
+      await fetch(slackWebhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: "<@U09TS4BLYRY> ⚠️ Audit LP recovery pulado: PIPEDRIVE_LP_FILTER_IDS não configurado",
+        }),
+      }).catch(err => console.error("[audit-lp-recovery] Slack alert failed:", err))
+    }
+    return NextResponse.json({ skipped: true, reason: "missing_filter_ids" })
+  }
+
   // Janela: deals criados nas últimas 24h (cobre o dia corrente + madrugada)
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
   const deals = await fetchRecentDeals(since)

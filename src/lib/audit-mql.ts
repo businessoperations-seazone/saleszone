@@ -91,7 +91,8 @@ export async function acquireLock(lockPath: string): Promise<boolean> {
 export async function releaseLock(lockPath: string): Promise<void> {
   try {
     await deleteBlob(lockPath)
-  } catch {
-    // Ignora — lock vai ficar orfão mas merge monotônico protege contra duplicata
+  } catch (err) {
+    console.error("[audit-mql] releaseLock failed:", { lockPath, err })
+    // Merge monotônico em runCheck protege contra duplicata mesmo com lock órfão.
   }
 }
