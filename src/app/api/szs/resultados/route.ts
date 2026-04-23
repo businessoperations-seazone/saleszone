@@ -4,11 +4,12 @@ import { paginate } from "@/lib/paginate";
 import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
 import { getModuleConfig } from "@/lib/modules";
 import { queryNekt } from "@/lib/nekt";
+import { querySapron } from "@/lib/sapron";
 
 /* ── Canal group → macro channels (for counts aggregation) ── */
 const CANAL_PARCEIROS = new Set(["Parceiros", "Ind. Corretor", "Ind. Franquia", "Ind. Outros Parceiros"]);
 const CANAL_SPOTS = new Set(["Spots"]);
-const CANAL_EXPANSAO = new Set(["Expansão"]);
+const CANAL_EXPANSAO = new Set(["Expansão", "Mônica", "Monica"]);
 
 function getChannelTabs(canalGroup: string): string[] {
   if (CANAL_PARCEIROS.has(canalGroup)) return ["Geral", "Parceiros"];
@@ -36,9 +37,9 @@ const CHANNEL_ORDER = ["Geral", "Vendas Diretas", "Parceiros", "Expansão"] as c
 
 const CHANNEL_FILTERS: Record<string, string> = {
   Geral: "Todos os canais\nExclui: Duplicado/Erro",
-  "Vendas Diretas": "Inclui: Marketing, Mônica, Ind. Colaborador, Eventos, Ind. Clientes, Outros\nExclui: Expansão, Spots, Ind. Corretor, Ind. Franquia, Duplicado/Erro",
+  "Vendas Diretas": "Inclui: Marketing, Ind. Colaborador, Eventos, Ind. Clientes, Outros\nExclui: Expansão, Spots, Mônica, Ind. Corretor, Ind. Franquia, Duplicado/Erro",
   Parceiros: "Inclui: Ind. Corretor, Ind. Franquia, Ind. Outros Parceiros\nExclui: Duplicado/Erro",
-  "Expansão": "Inclui: Expansão, Spots\nExclui: Duplicado/Erro",
+  "Expansão": "Inclui: Expansão, Spots, Mônica\nExclui: Duplicado/Erro",
 };
 
 interface ChannelMetas {
@@ -112,17 +113,17 @@ const WORK_DAYS_PER_WEEK = 5;
 function getNektCidadeSQL(cityFilter: string | null): string {
   if (!cityFilter) return "";
   if (cityFilter === "São Paulo")
-    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%são paulo%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%sao paulo%')";
+    return "AND (LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%são paulo%' OR LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%sao paulo%')";
   if (cityFilter === "Salvador")
-    return "AND LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%salvador%'";
+    return "AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%salvador%'";
   if (cityFilter === "Florianópolis")
-    return "AND (LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianopolis%' OR LOWER(COALESCE(cidade_do_imovel,'')) LIKE '%florianópolis%')";
+    return "AND (LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%florianopolis%' OR LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%florianópolis%')";
   // "Outros": não é SP, Salvador nem Floripa
-  return `AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%são paulo%'
-          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%sao paulo%'
-          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%salvador%'
-          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianopolis%'
-          AND LOWER(COALESCE(cidade_do_imovel,'')) NOT LIKE '%florianópolis%'`;
+  return `AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%são paulo%'
+          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%sao paulo%'
+          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%salvador%'
+          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%florianopolis%'
+          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%florianópolis%'`;
 }
 
 interface MetricPair { real: number; meta: number }
@@ -152,9 +153,6 @@ interface ChannelResult {
 interface ResultadosSZSData {
   month: string;
   channels: ChannelResult[];
-  diagnostic?: {
-    source: string;
-  };
 }
 
 export async function GET(request: NextRequest) {
@@ -210,6 +208,131 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // szs_daily_counts was synced with the wrong Nekt column (cidade_do_imovel instead of
+    // cidade_onde_fica_o_imovel), so Parceiros/Expansão city data is missing ("Sem cidade").
+    // When city filter is active, re-count MQL/SQL/OPP/WON directly from Nekt.
+    // For Parceiros deals, cidade_onde_fica_o_imovel is not reliably filled in Nekt.
+    // We run a second Nekt query for all Parceiros canals (no city filter), then filter
+    // in JS by Sapron deal IDs which are the source of truth for Parceiros city.
+    if (cityFilter) {
+      try {
+        const nextMonthDt = new Date(year, month + 1, 1);
+        const nextMonthDate = `${nextMonthDt.getFullYear()}-${String(nextMonthDt.getMonth() + 1).padStart(2, "0")}-01`;
+        const lookbackDt = new Date(year, month - 11, 1);
+        const lookbackStr = `${lookbackDt.getFullYear()}-${String(lookbackDt.getMonth() + 1).padStart(2, "0")}-01`;
+
+        // Step 1: Sapron deal IDs for this city (Parceiros source of truth)
+        let sapronPartnerIds = new Set<string>()
+        if (cityFilter !== "Outros") {
+          try {
+            let sapronCityWhere: string
+            if (cityFilter === "São Paulo")
+              sapronCityWhere = `(LOWER(property_city) LIKE '%são paulo%' OR LOWER(property_city) LIKE '%sao paulo%')`
+            else if (cityFilter === "Salvador")
+              sapronCityWhere = `LOWER(property_city) LIKE '%salvador%'`
+            else // Florianópolis
+              sapronCityWhere = `(LOWER(property_city) LIKE '%florianópolis%' OR LOWER(property_city) LIKE '%florianopolis%')`
+            const sapronRows = await querySapron(`
+              SELECT DISTINCT pipedrive_deal_id
+              FROM partners_indications_property
+              WHERE pipedrive_pipeline_id = '14'
+                AND ${sapronCityWhere}
+                AND pipedrive_deal_id IS NOT NULL AND pipedrive_deal_id != ''
+            `)
+            sapronPartnerIds = new Set(
+              sapronRows.map(r => String(r.pipedrive_deal_id ?? "").trim()).filter(id => /^\d+$/.test(id))
+            )
+            console.log(`[szs-resultados] Sapron ${cityFilter}: ${sapronPartnerIds.size} partner IDs`)
+          } catch (e) {
+            console.warn("[szs-resultados] Sapron partner IDs failed:", e)
+          }
+        }
+
+        // Step 2: Nekt query with cidade_onde_fica_o_imovel city filter (all canals)
+        const nektCityRows = await queryNekt(`
+          SELECT CAST(id AS VARCHAR) as deal_id, canal, negocio_criado_em, data_de_qualificacao, data_da_reuniao, ganho_em, status, motivo_da_perda
+          FROM nekt_silver.pipedrive_deals_readable
+          WHERE pipeline_id = 14
+            AND negocio_criado_em >= TIMESTAMP '${lookbackStr}'
+            ${getNektCidadeSQL(cityFilter)}
+        `);
+
+        // Step 3: Nekt query for all Parceiros canals (no city filter) — filter by Sapron IDs in JS
+        // This avoids large IN clauses and covers deals missing cidade_onde_fica_o_imovel
+        let extraRows: typeof nektCityRows.rows = []
+        if (sapronPartnerIds.size > 0) {
+          try {
+            const seenFromCityQuery = new Set(nektCityRows.rows.map(r => String(r.deal_id ?? "")))
+            const nektParceiros = await queryNekt(`
+              SELECT CAST(id AS VARCHAR) as deal_id, canal, negocio_criado_em, data_de_qualificacao, data_da_reuniao, ganho_em, status, motivo_da_perda
+              FROM nekt_silver.pipedrive_deals_readable
+              WHERE pipeline_id = 14
+                AND negocio_criado_em >= TIMESTAMP '${lookbackStr}'
+                AND canal IN ('Parceiros','Indicação de Corretor','Indicacao de Corretor','Ind. Corretor','Indicação de Franquia','Indicaçao de Franquia','Indicacao de Franquia','Ind. Franquia','Indicação de Outros Parceiros','Indicação de outros Parceiros (exceto corretor e franquia)','Ind. Outros Parceiros')
+            `)
+            extraRows = nektParceiros.rows.filter(r => {
+              const id = String(r.deal_id ?? "").trim()
+              return sapronPartnerIds.has(id) && !seenFromCityQuery.has(id)
+            })
+            console.log(`[szs-resultados] Parceiros supplement ${cityFilter}: ${nektParceiros.rows.length} total, ${extraRows.length} matched Sapron`)
+          } catch (e) {
+            console.warn("[szs-resultados] Nekt Parceiros supplement failed:", e)
+          }
+        }
+
+        const nektRows = { rows: [...nektCityRows.rows, ...extraRows] };
+
+        const NEKT_CANAL_MAP: Record<string, string> = {
+          "Marketing": "Marketing",
+          "Mônica": "Mônica", "Monica": "Mônica",
+          "Parceiros": "Parceiros",
+          "Indicação de Corretor": "Ind. Corretor", "Indicacao de Corretor": "Ind. Corretor", "Ind. Corretor": "Ind. Corretor",
+          "Indicação de Franquia": "Ind. Franquia", "Indicaçao de Franquia": "Ind. Franquia", "Indicacao de Franquia": "Ind. Franquia", "Ind. Franquia": "Ind. Franquia",
+          "Indicação de Outros Parceiros": "Ind. Outros Parceiros", "Indicação de outros Parceiros (exceto corretor e franquia)": "Ind. Outros Parceiros", "Ind. Outros Parceiros": "Ind. Outros Parceiros",
+          "Expansão": "Expansão", "Expansao": "Expansão", "Expansion": "Expansão",
+          "Spots": "Spots", "Spot Seazone": "Spots", "Colaborador Seazone (para compra de Spot)": "Spots", "Colaborador Seazone (para Compra De Spot)": "Spots",
+        };
+
+        const nektCC: Record<string, Record<string, number>> = {};
+        for (const ch of CHANNEL_ORDER) nektCC[ch] = { mql: 0, sql: 0, opp: 0, won: 0 };
+
+        const inMonth = (d: string | number | null) => {
+          if (d == null || d === "") return false;
+          const s = String(d).substring(0, 10);
+          return s >= startDate && s < nextMonthDate;
+        };
+
+        for (const row of nektRows.rows) {
+          if (row.motivo_da_perda && String(row.motivo_da_perda).toLowerCase() === "duplicado/erro") continue;
+          const canalGroup = NEKT_CANAL_MAP[String(row.canal || "")] || "Outros";
+          const isWon = String(row.status) === "won";
+
+          if (inMonth(row.negocio_criado_em)) nektCC["Geral"].mql++;
+          if (inMonth(row.data_de_qualificacao)) nektCC["Geral"].sql++;
+          if (inMonth(row.data_da_reuniao)) nektCC["Geral"].opp++;
+          if (inMonth(row.ganho_em) && isWon) nektCC["Geral"].won++;
+
+          for (const ch of getChannelTabs(canalGroup).filter(t => t !== "Geral")) {
+            if (inMonth(row.negocio_criado_em)) nektCC[ch].mql++;
+            if (inMonth(row.data_de_qualificacao)) nektCC[ch].sql++;
+            if (inMonth(row.data_da_reuniao)) nektCC[ch].opp++;
+            if (inMonth(row.ganho_em) && isWon) nektCC[ch].won++;
+          }
+        }
+
+        for (const ch of CHANNEL_ORDER) {
+          channelCounts[ch].mql = nektCC[ch].mql;
+          channelCounts[ch].sql = nektCC[ch].sql;
+          channelCounts[ch].opp = nektCC[ch].opp;
+          channelCounts[ch].won = nektCC[ch].won;
+        }
+        console.log(`[szs-resultados] Nekt city (${cityFilter}) rows=${nektRows.rows.length}: Geral=${nektCC.Geral.mql}/${nektCC.Geral.sql}/${nektCC.Geral.opp}/${nektCC.Geral.won} Parc=${nektCC.Parceiros.mql}/${nektCC.Parceiros.sql}/${nektCC.Parceiros.opp}/${nektCC.Parceiros.won}`);
+      } catch (e) {
+        console.warn("[szs-resultados] Nekt city query failed, falling back to szs_daily_counts:", e);
+      }
+    }
+
+
     // Last month WON from szs_deals (more complete than daily_counts)
     const prevWonRows = await paginate((o, ps) =>
       admin.from("szs_deals").select("canal, lost_reason, empreendimento").eq("status", "won").gte("won_time", prevStart).lt("won_time", startDate).range(o, o + ps - 1)
@@ -225,7 +348,7 @@ export async function GET(request: NextRequest) {
     }
 
     const metaRows = await paginate((o, ps) =>
-      admin.from("szs_meta_ads").select("ad_id, spend_month").gte("snapshot_date", startDate).range(o, o + ps - 1)
+      admin.from("szs_meta_ads").select("ad_id, spend_month, empreendimento").gte("snapshot_date", startDate).range(o, o + ps - 1)
     );
 
     // ── Orçamento do mês de szs_orcamento ──
@@ -256,14 +379,48 @@ export async function GET(request: NextRequest) {
       orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
     }
     // Dedup: max spend_month per ad_id (multiple snapshots in the month)
+    // When city filter is active, only include Meta ads for that city
     const adSpend = new Map<string, number>();
     for (const r of metaRows) {
+      if (cityFilter && getCidadeGroup(String(r.empreendimento || "")) !== cityFilter) continue;
       const spend = Number(r.spend_month) || 0;
       const cur = adSpend.get(r.ad_id) || 0;
       if (spend > cur) adSpend.set(r.ad_id, spend);
     }
     let totalSpend = 0;
     for (const v of adSpend.values()) totalSpend += v;
+
+    // Add Google Ads spend from Nekt ads_unificado (SZS vertical, Google platform)
+    // City filter applied via campaign_name LIKE matching
+    try {
+      const nextMonthDate = new Date(year, month + 1, 1).toISOString().substring(0, 10)
+      let googleCitySQL = ""
+      if (cityFilter === "São Paulo")
+        googleCitySQL = "AND (LOWER(campaign_name) LIKE '%são paulo%' OR LOWER(campaign_name) LIKE '%sao paulo%')"
+      else if (cityFilter === "Salvador")
+        googleCitySQL = "AND LOWER(campaign_name) LIKE '%salvador%'"
+      else if (cityFilter === "Florianópolis")
+        googleCitySQL = "AND (LOWER(campaign_name) LIKE '%florianopolis%' OR LOWER(campaign_name) LIKE '%florianópolis%')"
+      else if (cityFilter === "Outros")
+        googleCitySQL = `AND LOWER(campaign_name) NOT LIKE '%são paulo%' AND LOWER(campaign_name) NOT LIKE '%sao paulo%'
+          AND LOWER(campaign_name) NOT LIKE '%salvador%'
+          AND LOWER(campaign_name) NOT LIKE '%florianopolis%' AND LOWER(campaign_name) NOT LIKE '%florianópolis%'`
+
+      const googleRows = await queryNekt(`
+        SELECT SUM(spend) as total
+        FROM nekt_silver.ads_unificado
+        WHERE vertical = 'SZS'
+          AND LOWER(plataforma) LIKE '%google%'
+          AND date >= '${startDate}'
+          AND date < '${nextMonthDate}'
+          ${googleCitySQL}
+      `)
+      const googleSpend = Number(googleRows.rows[0]?.total || 0)
+      totalSpend += googleSpend
+      console.log(`[szs-resultados] Google Ads spend${cityFilter ? ` (${cityFilter})` : ""}: ${googleSpend}`)
+    } catch (e) {
+      console.warn("[szs-resultados] Google Ads spend query failed:", e)
+    }
 
     // Snapshots from pipedrive_daily_snapshot (pipeline 14)
     const todayStr = now.toISOString().substring(0, 10);
@@ -319,12 +476,16 @@ export async function GET(request: NextRequest) {
           "Indicacao de Franquia": "Ind. Franquia",
           "Ind. Franquia": "Ind. Franquia",
           "Indicação de Outros Parceiros": "Ind. Outros Parceiros",
+          "Indicação de outros Parceiros (exceto corretor e franquia)": "Ind. Outros Parceiros",
           "Ind. Outros Parceiros": "Ind. Outros Parceiros",
           // Expansão
           "Expansão": "Expansão",
           "Expansao": "Expansão",
           "Expansion": "Expansão",
           "Spots": "Spots",
+          "Spot Seazone": "Spots",
+          "Colaborador Seazone (para compra de Spot)": "Spots",
+          "Colaborador Seazone (para Compra De Spot)": "Spots",
         };
 
 
@@ -359,7 +520,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Total open: pipedrive_daily_snapshot é pipeline-level (sem filtro de cidade).
-    // Com cityFilter, ignora pdSnap — Nekt filtra por cidade_do_imovel mais abaixo.
+    // Com cityFilter, ignora pdSnap — Nekt filtra por cidade_onde_fica_o_imovel mais abaixo.
     if (!cityFilter) {
       if (pdSnap) {
         snapshots.Geral.totalOpen = pdSnap.total_open || 0;
@@ -524,9 +685,9 @@ export async function GET(request: NextRequest) {
         "Parceiros": "Parceiros",
         "Indicação de Corretor": "Ind. Corretor", "Indicacao de Corretor": "Ind. Corretor", "Ind. Corretor": "Ind. Corretor",
         "Indicação de Franquia": "Ind. Franquia", "Indicaçao de Franquia": "Ind. Franquia", "Indicacao de Franquia": "Ind. Franquia", "Ind. Franquia": "Ind. Franquia",
-        "Indicação de Outros Parceiros": "Ind. Outros Parceiros", "Ind. Outros Parceiros": "Ind. Outros Parceiros",
+        "Indicação de Outros Parceiros": "Ind. Outros Parceiros", "Indicação de outros Parceiros (exceto corretor e franquia)": "Ind. Outros Parceiros", "Ind. Outros Parceiros": "Ind. Outros Parceiros",
         "Expansão": "Expansão", "Expansao": "Expansão", "Expansion": "Expansão",
-        "Spots": "Spots",
+        "Spots": "Spots", "Spot Seazone": "Spots", "Colaborador Seazone (para compra de Spot)": "Spots", "Colaborador Seazone (para Compra De Spot)": "Spots",
       };
 
       const nektLastStage: Record<string, Record<string, number>> = {};
@@ -534,14 +695,30 @@ export async function GET(request: NextRequest) {
         nektLastStage[ch] = { mql: 0, sql: 0, opp: 0, reserva: 0, contrato: 0, won: 0 };
       }
 
+      // totalOpen per channel — conjuntos explícitos, sem fallback "Outros → VD"
+      // (canais não reconhecidos não são atribuídos a nenhum sub-canal)
+      const VD_OPEN_GROUPS = new Set(["Marketing"]);
+      const PARCEIROS_OPEN_GROUPS = new Set(["Ind. Corretor", "Ind. Franquia", "Ind. Outros Parceiros", "Parceiros"]);
+      const EXPANSAO_OPEN_GROUPS = new Set(["Expansão", "Spots", "Mônica"]);
+
+      const nektChannelOpen: Record<string, number> = {};
+      for (const ch of CHANNEL_ORDER) nektChannelOpen[ch] = 0;
+
       for (const r of nektSZSAll.rows) {
         const stageId = parseInt(String(r.etapa || "0"));
         const so = SZS_STAGE_ORDER_MAP[stageId] || 0;
-        if (so === 0) continue;
         const canalGroup = NEKT_CANAL_SZS[String(r.canal || "")] || "Outros";
+
+        // totalOpen: apenas canais explicitamente reconhecidos
+        if (VD_OPEN_GROUPS.has(canalGroup)) nektChannelOpen["Vendas Diretas"]++;
+        else if (PARCEIROS_OPEN_GROUPS.has(canalGroup)) nektChannelOpen["Parceiros"]++;
+        else if (EXPANSAO_OPEN_GROUPS.has(canalGroup)) nektChannelOpen["Expansão"]++;
+
+        // byStage: mantém getChannelTabs para consistência com szs_daily_counts
+        if (so === 0) continue;
         const tabs = getChannelTabs(canalGroup);
         for (const ch of tabs) {
-          if (ch === "Geral") continue; // Geral computed separately below
+          if (ch === "Geral") continue;
           if (so >= 1 && so < TH_SQL_SZS) nektLastStage[ch]["mql"]++;
           if (so >= TH_SQL_SZS) nektLastStage[ch]["sql"]++;
           if (so >= TH_OPP_SZS) nektLastStage[ch]["opp"]++;
@@ -566,14 +743,25 @@ export async function GET(request: NextRequest) {
       // WON from szs_daily_counts (already aggregated in channelCounts)
       for (const ch of CHANNEL_ORDER) nektLastStage[ch]["won"] = channelCounts[ch]["won"] || 0;
 
-      // Override last byStage point for all channels
+      // Geral totalOpen já foi definido corretamente pelo pipedrive_daily_snapshot ou pelo primeiro
+      // query COUNT do Nekt. Não sobrescrever aqui — apenas atualizar sub-canais com filtro de canal.
+      for (const ch of ["Vendas Diretas", "Parceiros", "Expansão"] as const) {
+        if (nektChannelOpen[ch] > 0) snapshots[ch].totalOpen = nektChannelOpen[ch];
+      }
+
+      // Override last byStage point para todos; sub-canais também atualizam openTotal
       for (const ch of CHANNEL_ORDER) {
         const arr = snapHistMap[ch];
         if (!arr || arr.length === 0) continue;
         const last = arr[arr.length - 1];
-        arr[arr.length - 1] = { ...last, byStage: nektLastStage[ch] };
+        const openOverride = ch !== "Geral" && nektChannelOpen[ch] > 0 ? nektChannelOpen[ch] : undefined;
+        arr[arr.length - 1] = {
+          ...last,
+          ...(openOverride ? { total: openOverride, openTotal: openOverride } : {}),
+          byStage: nektLastStage[ch],
+        };
       }
-      console.log(`[szs-resultados] Nekt byStage override: Geral MQL=${gMQL} SQL=${gSQL} OPP=${gOPP} AgDados=${gReserva} Contrato=${gContrato}`);
+      console.log(`[szs-resultados] Nekt open: VD=${nektChannelOpen["Vendas Diretas"]} Parc=${nektChannelOpen["Parceiros"]} Exp=${nektChannelOpen["Expansão"]} | byStage Geral MQL=${gMQL} SQL=${gSQL} OPP=${gOPP} AgDados=${gReserva} Contrato=${gContrato}`);
     } catch (e) {
       console.warn("[szs-resultados] Nekt indisponível para byStage override:", e);
     }
@@ -722,7 +910,7 @@ export async function GET(request: NextRequest) {
         opp: { real: counts.opp || 0, meta: meta.opp },
         won: { real: counts.won || 0, meta: meta.won },
       };
-      if (name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
+      if (name === "Geral" || name === "Vendas Diretas") metrics.orcamento = { real: Math.round(totalSpend), meta: orcamentoMeta || meta.orcamento || 0 };
       if (meta.leads != null) metrics.leads = { real: counts.mql || 0, meta: meta.leads };
 
       // Charts use delta-computed history from szs_deals
@@ -738,8 +926,8 @@ export async function GET(request: NextRequest) {
               aguardandoDados: snap.agDados,
               emContrato: snap.contrato,
               totalOpen: snap.totalOpen,
-              agDadosAccum: accumData[name].agDados,
-              contratoAccum: accumData[name].contrato,
+              agDadosAccum: (counts.reserva || 0) + (counts.contrato || 0) + (counts.won || 0),
+              contratoAccum: (counts.contrato || 0) + (counts.won || 0),
               agDadosMeta: meta.agDados,
               contratoMeta: meta.contrato,
             }
@@ -765,12 +953,7 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    const body: ResultadosSZSData = {
-      month: monthKey,
-      channels,
-      diagnostic: { source: "szs_daily_counts" },
-    };
-    return NextResponse.json(body);
+    return NextResponse.json({ month: monthKey, channels } satisfies ResultadosSZSData);
   } catch (err: unknown) {
     console.error("[szs/resultados]", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });
