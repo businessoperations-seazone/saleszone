@@ -244,11 +244,22 @@ export async function GET(req: NextRequest) {
       if (macro === "Vendas Diretas" || macro === "Parceiros") prevWon[macro]++;
     }
 
-    // ── 4. Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ──
-    // Meta: nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable.ads_proprietario
-    // Real: SUM(spend) de nekt_silver.ads_unificado WHERE vertical='Investimentos'
+    // ── 4. Orçamento: meta vem do squad_orcamento (input do usuário na tela de
+    //                 Orçamento). Gasto real vem do Nekt (FB+Google consolidado).
+    // Nekt orcamento_mkt_szi_szs_mktp... é uma tabela de Finance que NÃO reflete
+    // a meta configurada pelo BizOps — a meta autoritativa está em squad_orcamento.
     let orcamentoMeta = 0;
     let totalSpend = 0;
+
+    // Meta: squad_orcamento (user-defined), Nekt só como fallback se vazio
+    const { data: orcData } = await supabase
+      .from("squad_orcamento")
+      .select("orcamento_total")
+      .eq("mes", monthKey)
+      .maybeSingle();
+    orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Gasto: Nekt (vertical='Investimentos')
     try {
       const budget = await getNektBudget(
         "Investimentos",
@@ -256,11 +267,12 @@ export async function GET(req: NextRequest) {
         startDate,
         nextMonthStart,
       );
-      orcamentoMeta = Math.round(budget.orcamento);
       totalSpend = budget.spend;
-      console.log(`[geral] Nekt budget SZI: meta=${orcamentoMeta} spend=${Math.round(totalSpend)}`);
+      // Fallback: se squad_orcamento vazio, usa meta do Nekt
+      if (!orcamentoMeta) orcamentoMeta = Math.round(budget.orcamento);
+      console.log(`[geral] SZI: meta=${orcamentoMeta} (squad_orcamento${orcamentoMeta === Math.round(budget.orcamento) ? ' fallback Nekt' : ''}) spend=${Math.round(totalSpend)} (Nekt)`);
     } catch (e) {
-      console.warn("[geral] Nekt budget query failed, fallback para squad_orcamento + squad_meta_ads:", e);
+      console.warn("[geral] Nekt spend query failed, fallback para squad_meta_ads:", e);
       const metaRows = await paginate((o, ps) =>
         supabase
           .from("squad_meta_ads")
@@ -275,12 +287,6 @@ export async function GET(req: NextRequest) {
         if (spend > cur) adMax.set(r.ad_id, spend);
       }
       for (const v of adMax.values()) totalSpend += v;
-      const { data: orcData } = await supabase
-        .from("squad_orcamento")
-        .select("orcamento_total")
-        .eq("mes", monthKey)
-        .maybeSingle();
-      orcamentoMeta = orcData?.orcamento_total || 0;
     }
 
     // ── 6. Pipedrive daily snapshot (from pipedrive_daily_snapshot table, updated 1x/day) ──
