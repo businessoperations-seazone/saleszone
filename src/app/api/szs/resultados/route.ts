@@ -110,20 +110,14 @@ function buildEmailChannelMap(rules: { email: string }[]): Record<string, string
 const MEETINGS_PER_DAY = 16;
 const WORK_DAYS_PER_WEEK = 5;
 
+// cidade_onde_fica_o_imovel é enum no Pipedrive: "São Paulo, SP", "Salvador, BA", "Florianópolis, SC" etc.
 function getNektCidadeSQL(cityFilter: string | null): string {
   if (!cityFilter) return "";
-  if (cityFilter === "São Paulo")
-    return "AND (LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%são paulo%' OR LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%sao paulo%')";
-  if (cityFilter === "Salvador")
-    return "AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%salvador%'";
-  if (cityFilter === "Florianópolis")
-    return "AND (LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%florianopolis%' OR LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) LIKE '%florianópolis%')";
-  // "Outros": não é SP, Salvador nem Floripa
-  return `AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%são paulo%'
-          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%sao paulo%'
-          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%salvador%'
-          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%florianopolis%'
-          AND LOWER(COALESCE(cidade_onde_fica_o_imovel,'')) NOT LIKE '%florianópolis%'`;
+  if (cityFilter === "São Paulo")     return "AND cidade_onde_fica_o_imovel = 'São Paulo, SP'";
+  if (cityFilter === "Salvador")      return "AND cidade_onde_fica_o_imovel = 'Salvador, BA'";
+  if (cityFilter === "Florianópolis") return "AND cidade_onde_fica_o_imovel = 'Florianópolis, SC'";
+  // "Outros": qualquer cidade que não seja uma das 3 (inclui null/vazio)
+  return "AND (cidade_onde_fica_o_imovel IS NULL OR cidade_onde_fica_o_imovel NOT IN ('São Paulo, SP', 'Salvador, BA', 'Florianópolis, SC'))";
 }
 
 interface MetricPair { real: number; meta: number }
