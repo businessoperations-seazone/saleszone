@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { put } from "@vercel/blob"
+import { putBlob, fetchBlobJson } from "@/lib/blob"
 import { readLeads } from "@/lib/audit-mql"
 import { runCheck } from "@/lib/audit-mql-check"
 import { MOCK_LOG } from "@/lib/audit-mql-mock"
@@ -8,7 +8,6 @@ export const maxDuration = 120
 export const dynamic = "force-dynamic"
 
 const SLACK_WEBHOOK  = process.env.SLACK_WEBHOOK_AUDIT_MQL || ""
-const BLOB_STORE_URL = process.env.BLOB_URL                || ""
 
 function offsetKey(days: number) {
   const d = new Date(Date.now() - 3 * 60 * 60 * 1000)
@@ -167,17 +166,7 @@ async function sendSlack(summary: NonNullable<Awaited<ReturnType<typeof buildSum
 }
 
 async function saveLog(summary: NonNullable<Awaited<ReturnType<typeof buildSummary>>>) {
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
-  let logs: typeof summary[] = []
-  if (BLOB_STORE_URL) {
-    try {
-      const res = await fetch(`${BLOB_STORE_URL}/audit-mql/log.json`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        cache: "no-store",
-      })
-      if (res.ok) logs = await res.json()
-    } catch { /* vazio */ }
-  }
+  let logs = (await fetchBlobJson<typeof summary[]>("audit-mql/log.json")) ?? []
 
   const idx = logs.findIndex(l => l.key === summary.key)
   if (idx >= 0) logs[idx] = summary
@@ -185,10 +174,7 @@ async function saveLog(summary: NonNullable<Awaited<ReturnType<typeof buildSumma
 
   logs = logs.slice(0, 90)
 
-  await put("audit-mql/log.json", JSON.stringify(logs), {
-    access: "private", addRandomSuffix: false, allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  })
+  await putBlob("audit-mql/log.json", logs)
 }
 
 // GET — cron diário (com Authorization) ou leitura do log histórico (sem auth)
@@ -216,34 +202,14 @@ export async function GET(req: NextRequest) {
   }
 
   // Sem auth → retorna o log histórico (UI)
-  if (!BLOB_STORE_URL) {
-    // Em desenvolvimento, retorna mock
+  const logs = await fetchBlobJson<unknown[]>("audit-mql/log.json")
+  if (!logs || logs.length === 0) {
     if (process.env.NODE_ENV === "development") {
       return NextResponse.json(MOCK_LOG, { headers: { "Cache-Control": "no-store" } })
     }
     return NextResponse.json([])
   }
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
-  try {
-    const res = await fetch(`${BLOB_STORE_URL}/audit-mql/log.json`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) {
-      // Em desenvolvimento, retorna mock como fallback
-      if (process.env.NODE_ENV === "development") {
-        return NextResponse.json(MOCK_LOG, { headers: { "Cache-Control": "no-store" } })
-      }
-      return NextResponse.json([])
-    }
-    return NextResponse.json(await res.json(), { headers: { "Cache-Control": "no-store" } })
-  } catch {
-    // Em desenvolvimento, retorna mock como fallback
-    if (process.env.NODE_ENV === "development") {
-      return NextResponse.json(MOCK_LOG, { headers: { "Cache-Control": "no-store" } })
-    }
-    return NextResponse.json([])
-  }
+  return NextResponse.json(logs, { headers: { "Cache-Control": "no-store" } })
 }
 
 // POST — gera e envia o resumo (cron diário ou manual via CRON_SECRET)

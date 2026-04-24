@@ -5,10 +5,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
 };
-// Derived at runtime so the function writes to whichever project it is deployed on.
-// Falls back to the squad-data project ref for local development.
-const _supabaseUrl = Deno.env.get("SUPABASE_URL") || "https://cncistmevwwghtaiyaao.supabase.co";
-const SUPABASE_REF = new URL(_supabaseUrl).hostname.split(".")[0];
+const SUPABASE_REF = (Deno.env.get("SUPABASE_URL") || "").replace(/^https?:\/\//, "").split(".")[0];
 
 // ---- REST API helpers (replaces Supabase JS client for DB writes — silent failure bug in Deno) ----
 // params uses array of [key, value] pairs to support duplicate keys (e.g. date=gte&date=lte)
@@ -150,10 +147,10 @@ type NektDeal = Record<string, string | null>;
 // ---- Deal helpers (Nekt row format) ----
 function getDateField(deal: NektDeal, tab: Tab): string | null {
   switch (tab) {
-    case "mql": return deal.negocio_criado_em || null;
+    case "mql": return deal.deal_created || null;
     case "sql": return deal.data_de_qualificacao || null;
     case "opp": return deal.data_da_reuniao || null;
-    case "won": return deal.ganho_em || null;
+    case "won": return deal.won_time || null;
   }
 }
 
@@ -249,7 +246,7 @@ function countDealsByStage(
     const emp = getCidade(deal);
     const bairro = getBairro(deal);
     if (!emp) continue;
-    const stageId = parseInt(deal.etapa || "0");
+    const stageId = parseInt(deal.stage || "0");
     if (stageId === STAGE_RESERVA) {
       const key = `${today}|${canalGroup}|${emp}|${bairro}`;
       stageCounts.reserva.set(key, (stageCounts.reserva.get(key) || 0) + 1);
@@ -279,9 +276,9 @@ async function writeStageCounts(svcKey: string, stageCounts: Record<"reserva" | 
 }
 
 // ---- Nekt SQL column list for deals ----
-const NEKT_DEAL_COLUMNS = `id, pipeline_id, status, etapa, canal, empreendimento,
-    cidade_onde_fica_o_imovel, bairro_do_imovel, negocio_criado_em, ganho_em, data_de_perda,
-    data_de_qualificacao, data_da_reuniao, owner_id, deal_owner_name, motivo_da_perda, titulo`;
+const NEKT_DEAL_COLUMNS = `id, pipeline_id, status, stage, canal, empreendimento,
+    cidade_onde_fica_o_imovel, bairro_do_imovel, deal_created, won_time, lost_time,
+    data_de_qualificacao, data_da_reuniao, owner_id, deal_owner_name, motivo_da_perda, title`;
 
 // ---- Mode: daily-open (Nekt query, replaces counts) ----
 async function syncDailyOpen(nektApiKey: string, supabase: any, svcKey: string) {
@@ -326,8 +323,8 @@ async function syncDailyByStatus(nektApiKey: string, supabase: any, svcKey: stri
   console.log(`syncDailyByStatus: ${status} from Nekt, cutoff=${cutoffStr}`);
 
   const dateFilter = status === "won"
-    ? `AND ganho_em >= TIMESTAMP '${cutoffStr}'`
-    : `AND data_de_perda >= TIMESTAMP '${cutoffStr}'`;
+    ? `AND won_time >= TIMESTAMP '${cutoffStr}'`
+    : `AND lost_time >= TIMESTAMP '${cutoffStr}'`;
 
   const sql = `
     SELECT ${NEKT_DEAL_COLUMNS}
@@ -352,7 +349,7 @@ async function syncAlignment(nektApiKey: string, svcKey: string) {
 
   const sql = `
     SELECT id, pipeline_id, canal, cidade_do_imovel, bairro_do_imovel,
-           owner_id, deal_owner_name, titulo
+           owner_id, deal_owner_name, title
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'open'
   `;
@@ -368,7 +365,7 @@ async function syncAlignment(nektApiKey: string, svcKey: string) {
     counts.set(key, (counts.get(key) || 0) + 1);
     dealRows.push({
       deal_id: parseInt(deal.id || "0"),
-      title: deal.titulo || `Deal #${deal.id}`,
+      title: deal.title || `Deal #${deal.id}`,
       empreendimento: emp,
       owner_name: String(ownerName),
       synced_at: new Date().toISOString(),
@@ -529,7 +526,7 @@ async function backfillMonthlyClear(supabase: any) {
 // Count deal into monthly map based on max stage reached
 function countDealByStage(deal: NektDeal, maxOrder: number, monthly: Map<string, number>, startDate: string, endDate: string) {
   if (deal.motivo_da_perda === "Duplicado/Erro") return;
-  const addTime = deal.negocio_criado_em;
+  const addTime = deal.deal_created;
   if (!addTime) return;
   const day = addTime.substring(0, 10);
   if (day < startDate || day > endDate) return;
@@ -563,7 +560,7 @@ async function backfillOpenWon(nektApiKey: string, supabase: any) {
 
   const monthly = new Map<string, number>();
 
-  // Open deals — etapa is reliable for active deals
+  // Open deals — stage is reliable for active deals
   const openSql = `
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
@@ -573,7 +570,7 @@ async function backfillOpenWon(nektApiKey: string, supabase: any) {
   let totalOpen = 0;
   for (const deal of openDeals) {
     totalOpen++;
-    const currentOrder = STAGE_ORDER[parseInt(deal.etapa || "0")] || 0;
+    const currentOrder = STAGE_ORDER[parseInt(deal.stage || "0")] || 0;
     countDealByStage(deal, currentOrder, monthly, startDate, endDate);
   }
 
@@ -582,7 +579,7 @@ async function backfillOpenWon(nektApiKey: string, supabase: any) {
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'won'
-      AND negocio_criado_em >= TIMESTAMP '${startDate}'
+      AND deal_created >= TIMESTAMP '${startDate}'
   `;
   const wonDeals = await queryNekt(wonSql, nektApiKey);
   let totalWon = 0;
@@ -621,7 +618,7 @@ async function backfillLostWithFlow(nektApiKey: string, supabase: any, _startFro
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'lost'
-      AND negocio_criado_em >= TIMESTAMP '${startDate}'
+      AND deal_created >= TIMESTAMP '${startDate}'
   `;
   const deals = await queryNekt(sql, nektApiKey);
 
@@ -630,8 +627,8 @@ async function backfillLostWithFlow(nektApiKey: string, supabase: any, _startFro
 
   for (const deal of deals) {
     mktDeals++;
-    // For lost deals, use current etapa as max stage (Nekt has the stage where deal was lost)
-    const currentOrder = STAGE_ORDER[parseInt(deal.etapa || "0")] || 0;
+    // For lost deals, use current stage as max stage (Nekt has the stage where deal was lost)
+    const currentOrder = STAGE_ORDER[parseInt(deal.stage || "0")] || 0;
     countDealByStage(deal, currentOrder, monthly, startDate, endDate);
   }
 
@@ -670,14 +667,14 @@ async function syncMonthlyRollup(nektApiKey: string, supabase: any) {
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID}
-      AND negocio_criado_em >= TIMESTAMP '${startDate}'
+      AND deal_created >= TIMESTAMP '${startDate}'
   `;
   const deals = await queryNekt(sql, nektApiKey);
   let totalDeals = 0;
 
   for (const deal of deals) {
     if (deal.motivo_da_perda === "Duplicado/Erro") continue;
-    const addTime = deal.negocio_criado_em;
+    const addTime = deal.deal_created;
     if (!addTime) continue;
     const day = addTime.substring(0, 10);
     if (day < startDate || day > endDate) continue;
@@ -687,7 +684,7 @@ async function syncMonthlyRollup(nektApiKey: string, supabase: any) {
     const bairro = getBairro(deal);
     if (!emp) continue;
     const month = day.substring(0, 7);
-    const stageOrder = STAGE_ORDER[parseInt(deal.etapa || "0")] || 0;
+    const stageOrder = STAGE_ORDER[parseInt(deal.stage || "0")] || 0;
     const hasQualDate = !!deal.data_de_qualificacao;
     const hasReunDate = !!deal.data_da_reuniao;
 
@@ -726,7 +723,7 @@ async function syncSnapshot(nektApiKey: string, supabase: any) {
   console.log(`syncSnapshot: querying Nekt for open deals snapshot...`);
 
   const sql = `
-    SELECT id, pipeline_id, status, etapa, canal, motivo_da_perda
+    SELECT id, pipeline_id, status, stage, canal, motivo_da_perda
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'open'
   `;
@@ -740,7 +737,7 @@ async function syncSnapshot(nektApiKey: string, supabase: any) {
     const cg = getCanalGroup(deal);
     if (!snapCounts[cg]) snapCounts[cg] = { total: 0, mql: 0, sql: 0, opp: 0, won: 0, ag_dados: 0, contrato: 0 };
     const c = snapCounts[cg];
-    const so = STAGE_ORDER[parseInt(deal.etapa || "0")] || 0;
+    const so = STAGE_ORDER[parseInt(deal.stage || "0")] || 0;
     c.total++;
     c.mql++;
     if (so >= SQL_MIN_ORDER) c.sql++;

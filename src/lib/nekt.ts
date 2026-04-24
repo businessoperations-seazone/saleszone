@@ -174,3 +174,51 @@ export function buildFilteredSQL(filters: {
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
   return `SELECT * FROM nekt_silver.ads_unificado ${where} ORDER BY date DESC`
 }
+
+export interface NektBudget {
+  /** Orçamento aprovado (meta) do mês — de nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable */
+  orcamento: number
+  /** Gasto real agregado (Facebook + Google) — de nekt_silver.ads_unificado */
+  spend: number
+}
+
+/**
+ * Busca o orçamento aprovado e o gasto real consolidado para um vertical.
+ *
+ * Fontes:
+ *  - Meta (target): nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable (coluna por vertical)
+ *  - Real (actual): SUM(spend) de nekt_silver.ads_unificado filtrado pelo vertical
+ *
+ * @param vertical Vertical em ads_unificado: 'SZS', 'Investimentos', 'Marketplace'
+ * @param orcamentoColumn Coluna em orcamento_mkt_szi_szs_mktp_hosp_cco_lovable:
+ *   'ads_venda_spot' (SZS) | 'ads_proprietario' (SZI) | 'ads_marketplace' (MKTP)
+ * @param monthStart Primeiro dia do mês em YYYY-MM-DD (ex: '2026-04-01')
+ * @param nextMonthStart Primeiro dia do mês seguinte (exclusivo)
+ * @param extraSpendFilter Cláusula AND opcional para filtrar o spend por campanha
+ */
+export async function getNektBudget(
+  vertical: string,
+  orcamentoColumn: "ads_venda_spot" | "ads_proprietario" | "ads_marketplace",
+  monthStart: string,
+  nextMonthStart: string,
+  extraSpendFilter: string = "",
+): Promise<NektBudget> {
+  const [orcRes, spendRes] = await Promise.all([
+    queryNekt(`
+      SELECT ${orcamentoColumn} as orcamento
+      FROM nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable
+      WHERE data = DATE '${monthStart}'
+    `),
+    queryNekt(`
+      SELECT SUM(spend) as total
+      FROM nekt_silver.ads_unificado
+      WHERE vertical = '${vertical}'
+        AND date >= DATE '${monthStart}' AND date < DATE '${nextMonthStart}'
+        ${extraSpendFilter}
+    `),
+  ])
+  return {
+    orcamento: Number(orcRes.rows[0]?.orcamento || 0),
+    spend: Number(spendRes.rows[0]?.total || 0),
+  }
+}

@@ -17,6 +17,77 @@ const FIELD_EMPREENDIMENTO = "6d565fd4fce66c16da078f520a685fa2fa038272";
 const FIELD_QUALIFICACAO = "bc74bcc4326527cbeb331d1697d4c8812d68506e";
 const FIELD_REUNIAO = "bfafc352c5c6f2edbaa41bf6d1c6daa825fc9c16";
 const FIELD_RD_SOURCE = "ff53f6910138fa1d8969b686acb4b1336d50c9bd";
+
+const EMPREENDIMENTO_MAP: Record<string, string> = {
+  "3313": "Altavista",
+  "1132": "Barra de São Miguel Spot",
+  "3478": "Barra Grande Spot",
+  "462": "Barra Spot",
+  "2840": "Batel Spot",
+  "3303": "Bonito Spot",
+  "3451": "Bonito Spot II",
+  "3266": "Cachoeira Beach Spot",
+  "2835": "Cachoeira Spot",
+  "2324": "Campeche Spot",
+  "4090": "Canas Beach Spot",
+  "2573": "Canasvieiras Spot",
+  "692": "Canela Spot",
+  "3416": "Caraguá Spot",
+  "510": "Downtown",
+  "1125": "Duetto",
+  "4271": "Farol da Barra Spot",
+  "4056": "Foz Spot",
+  "3201": "Ilha do Campeche II Spot",
+  "2607": "Ilha do Campeche Spot",
+  "828": "Imbassaí Spot",
+  "464": "Ingleses Spot",
+  "3467": "Itacaré Spot",
+  "466": "Japaratinga Spot",
+  "3985": "Jardim dos Namorados",
+  "2904": "Jurerê Beach Spot",
+  "506": "Jurerê Spot",
+  "3333": "Jurerê Spot II",
+  "4586": "Jurerê Spot III",
+  "505": "Lagoa Spot",
+  "2935": "Marista 144 Spot",
+  "1126": "Maxxi Garden",
+  "3158": "Meireles Spot",
+  "2885": "Morro das Pedras Spot",
+  "1127": "Mosaico",
+  "4495": "Natal Spot",
+  "3182": "New Life",
+  "4292": "Novo Campeche Spot",
+  "4655": "Novo Campeche Spot II",
+  "636": "Olímpia Spot",
+  "490": "Penha Spot",
+  "1124": "Pio 4",
+  "3489": "Ponta das Canas Spot",
+  "4109": "Ponta das Canas Spot II",
+  "1128": "Reflect",
+  "2795": "Rosa Norte Spot",
+  "504": "Rosa Spot",
+  "463": "Rosa Sul Spot",
+  "1447": "Salvador Spot",
+  "3298": "Santinho Spot",
+  "3119": "Santo Antônio Spot",
+  "3308": "Soul Guarajuba",
+  "2868": "Sul da Ilha Spot",
+  "1129": "T58",
+  "824": "Top Club",
+  "1171": "Trancoso Spot",
+  "465": "Urubici Spot",
+  "2526": "Urubici Spot II",
+  "2415": "Vale do Ouro",
+  "461": "Vistas de Anitá I",
+  "637": "Vistas de Anitá II",
+  "2745": "VN Ueno",
+  "3309": "Zn Barra",
+};
+
+function getEmpreendimento(deal: any): string | null {
+  const enumId = String(deal[FIELD_EMPREENDIMENTO] || "");
+  return EMPREENDIMENTO_MAP[enumId] || null;
+}
 const FIELD_PRESELLER = "34a7f4f5f78e8a8d4751ddfb3cfcfb224d8ff908";
 
 const OPP_MIN_ORDER = 9; // stage_order >= 9 = OPP (Reunião/OPP)
@@ -80,7 +151,7 @@ function dealToRow(deal: any, maxStageOrder: number | null, flowFetched: boolean
     update_time: deal.update_time || null,
     canal: String(deal[FIELD_CANAL] || ""),
     empreendimento_id: String(deal[FIELD_EMPREENDIMENTO] || ""),
-    empreendimento: null, // Decor doesn't filter by empreendimento
+    empreendimento: getEmpreendimento(deal),
     qualificacao_date: deal[FIELD_QUALIFICACAO] || null,
     reuniao_date: deal[FIELD_REUNIAO] || null,
     lost_reason: deal.lost_reason || null,

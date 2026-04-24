@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+let DB_SCHEMA = "public";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -140,14 +142,14 @@ function nektDealToRow(deal: Record<string, string | null>, maxStageOrder: numbe
   const stageOrder = STAGE_ORDER[stageId] || 0;
   return {
     deal_id: parseInt(deal.id || "0"),
-    title: deal.titulo || `Deal #${deal.id}`,
+    title: deal.title || `Deal #${deal.id}`,
     stage_id: stageId,
     status: deal.status || "open",
     user_id: parseInt(deal.owner_id || "0"),
     owner_name: deal.owner_name || null,
-    add_time: deal.negocio_criado_em || null,
-    won_time: deal.ganho_em || null,
-    lost_time: deal.data_de_perda || null,
+    add_time: deal.deal_created || null,
+    won_time: deal.won_time || null,
+    lost_time: deal.lost_time || null,
     update_time: deal.atualizado_em || null,
     canal: deal.canal || null,
     empreendimento_id: null,
@@ -172,12 +174,12 @@ function nektDealToRow(deal: Record<string, string | null>, maxStageOrder: numbe
 function buildDealsSQL(status: string, cutoffDate?: string): string {
   let where = `WHERE d.pipeline_id = 28 AND d.status = '${status}'`;
   if (cutoffDate) {
-    where += ` AND d.negocio_criado_em >= TIMESTAMP '${cutoffDate}'`;
+    where += ` AND d.deal_created >= TIMESTAMP '${cutoffDate}'`;
   }
   // Use ROW_NUMBER to pick latest SCD2 record per user (avoids row multiplication)
   return `
-SELECT d.id, d.titulo, d.etapa, d.status, d.owner_id, u.name as owner_name,
-       d.negocio_criado_em, d.ganho_em, d.data_de_perda, d.atualizado_em,
+SELECT d.id, d.title, d.etapa, d.status, d.owner_id, u.name as owner_name,
+       d.deal_created, d.won_time, d.lost_time, d.atualizado_em,
        d.canal, d.empreendimento, d.data_de_qualificacao, d.data_da_reuniao,
        d.motivo_da_perda, d.rd_source, d.data_da_ultima_atividade, d.proxima_atividade_em,
        d.ultima_alteracao_de_etapa, d.tipo_de_venda, d.pre_vendedor_a, pu.name as preseller_name
@@ -237,7 +239,7 @@ async function getMaxStageReached(apiToken: string, dealId: number, currentOrder
 }
 
 async function getVaultSecret(supabase: any, name: string): Promise<string | null> {
-  const { data, error } = await supabase.rpc("vault_read_secret", { secret_name: name });
+  const { data, error } = await supabase.schema("public").rpc("vault_read_secret", { secret_name: name });
   if (error) { console.error(`Vault read ${name}:`, error.message); return null; }
   return data || null;
 }
@@ -505,8 +507,72 @@ async function syncDealsFlow(apiToken: string, supabase: any) {
   };
 }
 
+// ---- Mode: backfill-stage-entries (Nekt deal_flow) ----
+// Uses nekt_trusted.pipedrive_v2_consolidated_deal_flow to get LAST entry date per deal into
+// stage 191 (reserva) and 192 (contrato). Single Nekt query + bulk updates.
+async function syncBackfillStageEntries(nektApiKey: string, supabase: any) {
+  console.log(`syncBackfillStageEntries: querying Nekt for stage entries into 191/192...`);
+
+  const sql = `
+    SELECT CAST(item_id AS varchar) AS deal_id,
+           new_value AS stage,
+           MAX(log_time) AS entered_at
+    FROM nekt_trusted.pipedrive_v2_consolidated_deal_flow
+    WHERE field_key = 'stage_id' AND new_value IN ('191', '192')
+    GROUP BY item_id, new_value
+  `;
+  const rows = await queryNekt(nektApiKey, sql);
+  console.log(`  Nekt returned ${rows.length} stage-entry events`);
+
+  // Build per-deal map
+  const dealMap = new Map<number, { reserva: string | null; contrato: string | null }>();
+  for (const r of rows) {
+    const dealId = parseInt(r.deal_id || "0");
+    if (!dealId) continue;
+    let entry = dealMap.get(dealId);
+    if (!entry) { entry = { reserva: null, contrato: null }; dealMap.set(dealId, entry); }
+    const ts = r.entered_at || null;
+    if (r.stage === "191") entry.reserva = ts;
+    else if (r.stage === "192") entry.contrato = ts;
+  }
+
+  console.log(`  Unique deals with stage entries: ${dealMap.size}`);
+
+  // Bulk update in batches of 500 via RPC or upsert
+  const updates = [...dealMap.entries()].map(([deal_id, v]) => ({
+    deal_id,
+    reserva_entered_at: v.reserva,
+    contrato_entered_at: v.contrato,
+  }));
+
+  let processed = 0;
+  let failed = 0;
+  const CONCURRENCY = 50;
+  for (let i = 0; i < updates.length; i += CONCURRENCY) {
+    const chunk = updates.slice(i, i + CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (u) => {
+      const patch: Record<string, string | null> = {};
+      if (u.reserva_entered_at) patch.reserva_entered_at = u.reserva_entered_at;
+      if (u.contrato_entered_at) patch.contrato_entered_at = u.contrato_entered_at;
+      if (Object.keys(patch).length === 0) return { ok: false };
+      const { error } = await supabase.from("squad_deals").update(patch).eq("deal_id", u.deal_id);
+      return { ok: !error, err: error?.message };
+    }));
+    for (const r of results) { if (r.ok) processed++; else failed++; }
+  }
+
+  console.log(`  Updated ${processed}, failed ${failed}`);
+  return { processed, failed, total_events: rows.length, unique_deals: dealMap.size, done: true };
+}
+
 // ---- Deno.serve handler ----
 Deno.serve(async (req) => {
+  // DB_SCHEMA injected
+  try {
+    const __body = await req.clone().json().catch(() => ({}));
+    DB_SCHEMA = __body?.__schema || "public";
+  } catch { DB_SCHEMA = "public"; }
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -514,10 +580,7 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
 
   try {
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { db: { schema: DB_SCHEMA } });
 
     // Parse mode from request body
     const body = await req.json().catch(() => ({}));
@@ -531,7 +594,7 @@ Deno.serve(async (req) => {
       case "deals-won":
       case "deals-lost": {
         // These modes use Nekt API
-        const { data: nektKey, error: nektErr } = await supabase.rpc("vault_read_secret", {
+        const { data: nektKey, error: nektErr } = await supabase.schema("public").rpc("vault_read_secret", {
           secret_name: "NEKT_API_KEY",
         });
         if (nektErr || !nektKey) throw new Error(`Vault error (NEKT_API_KEY): ${nektErr?.message}`);
@@ -548,16 +611,24 @@ Deno.serve(async (req) => {
       }
       case "deals-flow": {
         // This mode still uses Pipedrive API
-        const { data: tokenData, error: tokenErr } = await supabase.rpc("vault_read_secret", {
+        const { data: tokenData, error: tokenErr } = await supabase.schema("public").rpc("vault_read_secret", {
           secret_name: "PIPEDRIVE_API_TOKEN",
         });
         if (tokenErr || !tokenData) throw new Error(`Vault error: ${tokenErr?.message}`);
         result = await syncDealsFlow(tokenData, supabase);
         break;
       }
+      case "backfill-stage-entries": {
+        const { data: nektKey, error: nektErr } = await supabase.schema("public").rpc("vault_read_secret", {
+          secret_name: "NEKT_API_KEY",
+        });
+        if (nektErr || !nektKey) throw new Error(`Vault error (NEKT_API_KEY): ${nektErr?.message}`);
+        result = await syncBackfillStageEntries(nektKey, supabase);
+        break;
+      }
       case "inspect-fields": {
         // Debug mode: still uses Pipedrive API
-        const { data: tokenData, error: tokenErr } = await supabase.rpc("vault_read_secret", {
+        const { data: tokenData, error: tokenErr } = await supabase.schema("public").rpc("vault_read_secret", {
           secret_name: "PIPEDRIVE_API_TOKEN",
         });
         if (tokenErr || !tokenData) throw new Error(`Vault error: ${tokenErr?.message}`);

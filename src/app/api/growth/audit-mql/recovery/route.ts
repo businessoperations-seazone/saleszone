@@ -108,7 +108,7 @@ async function getLeadsForForm(
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
-async function recoverDate(targetDate: string, pageTokens: Map<string, string>) {
+async function recoverDate(targetDate: string, pageTokens: Map<string, string>, allowOld = false) {
   const minDate = new Date(`${targetDate}T03:00:00Z`)
   const maxDate = new Date(minDate.getTime() + 24 * 60 * 60 * 1000 - 1)
   const minUnix = Math.floor(minDate.getTime() / 1000)
@@ -141,8 +141,10 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
 
       for (const ml of metaLeads) {
         // Rejeita leads com mais de 48h — captura lixo histórico quando o filtro
-        // de data da Meta API falha, sem perder leads legítimos da fronteira de dia
-        if (ml.created_time) {
+        // de data da Meta API falha, sem perder leads legítimos da fronteira de dia.
+        // Em modo backfill (allowOld=true) o filtro é relaxado para permitir
+        // reconstrução histórica de dias passados.
+        if (!allowOld && ml.created_time) {
           const age = Date.now() - new Date(ml.created_time).getTime()
           if (age > 48 * 60 * 60 * 1000) { skipped++; continue }
         }
@@ -240,8 +242,8 @@ async function recoverDate(targetDate: string, pageTokens: Map<string, string>) 
   return { date: targetDate, recovered, backfilled, skipped, errors, existingBefore: existing.length, recoveredLeads }
 }
 
-async function recoverAndCheck(targetDate: string, pageTokens: Map<string, string>) {
-  const result = await recoverDate(targetDate, pageTokens)
+async function recoverAndCheck(targetDate: string, pageTokens: Map<string, string>, allowOld = false) {
+  const result = await recoverDate(targetDate, pageTokens, allowOld)
   if (result.recovered > 0 || result.backfilled > 0) await runCheck(targetDate)
   return result
 }
@@ -268,10 +270,11 @@ export async function POST(req: NextRequest) {
 
   const pageTokens = await getPageTokens()
   const body = await req.json().catch(() => ({}))
-  const targetDate = body.date || null
+  const targetDate: string | null = body.date || null
+  const allowOld: boolean = body.backfill === true
 
   if (targetDate) {
-    return NextResponse.json(await recoverAndCheck(targetDate, pageTokens))
+    return NextResponse.json(await recoverAndCheck(targetDate, pageTokens, allowOld))
   }
 
   const r = await recoverAndCheck(dateKey(), pageTokens)

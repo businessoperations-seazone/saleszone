@@ -164,7 +164,7 @@ export async function GET(request: Request) {
       for (const d of dealList) {
         if (d.max_stage_order >= 1) mql++;  // MQL = all deals (Lead in)
         if (d.max_stage_order >= 4) sql++;  // SQL = Qualificado (stage 4)
-        if (d.max_stage_order >= 9) opp++;  // OPP = FUP (stage 9) — consistent with OPP_MIN_ORDER in sync
+        if (d.max_stage_order >= 8) opp++;  // OPP = Reunião Realizada (stage 8) — igual SZI
         if (d.status === "won") won++;
       }
       return { mql, sql, opp, won };

@@ -1,15 +1,14 @@
-// Webhook para Landing Pages (Elementor Forms).
-// Elementor dispara 2 webhooks em paralelo no submit:
+// Webhook para Landing Pages (JetEngine Forms / Elementor).
+// LP dispara 2 webhooks em paralelo no submit:
 //   (1) n8n → cria Pessoa+Deal no Pipedrive + MIA
 //   (2) saleszone (esta rota) → grava no blob para auditoria
 //
-// Auth: Authorization: Bearer {LP_WEBHOOK_SECRET}
-// Payload: Elementor manda application/x-www-form-urlencoded OR application/json
-// dependendo da configuração do webhook no Actions After Submit.
+// Auth: Authorization: Bearer {LP_WEBHOOK_SECRET}  (Elementor)
+//       ?secret={LP_WEBHOOK_SECRET}                 (JetEngine — não suporta headers customizados)
+// Payload: application/json (flat ou fields-nested) OR application/x-www-form-urlencoded
 
 import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
-import { waitUntil } from "@vercel/functions"
 import {
   LpLeadRecord,
   lpDateKey,
@@ -25,7 +24,7 @@ const LP_WEBHOOK_SECRET = process.env.LP_WEBHOOK_SECRET || ""
 // Mapa de possíveis nomes de campo → chave canônica.
 // Elementor permite nomear os campos como quiser; aqui aceitamos várias variações.
 const FIELD_ALIASES: Record<string, string[]> = {
-  name:  ["name", "nome", "full_name", "your-name", "seu-nome"],
+  name:  ["name", "nome", "full_name", "your-name", "seu-nome", "field_name"],
   email: ["email", "e-mail", "your-email", "seu-email"],
   phone: ["phone", "telefone", "tel", "celular", "whatsapp", "your-phone"],
 }
@@ -103,17 +102,21 @@ export async function POST(req: NextRequest) {
     console.error("[audit-lp-webhook] LP_WEBHOOK_SECRET não configurado — rejecting request")
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 })
   }
-  const auth = req.headers.get("authorization") || ""
-  if (auth !== `Bearer ${LP_WEBHOOK_SECRET}`) {
+  const auth     = req.headers.get("authorization") || ""
+  const qsSecret = req.nextUrl.searchParams.get("secret") || ""
+  const authorized = auth === `Bearer ${LP_WEBHOOK_SECRET}` ||
+                     (!!qsSecret && qsSecret === LP_WEBHOOK_SECRET)
+  if (!authorized) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   const fields = await parseBody(req)
 
-  // Metadata do form (Elementor envia campos "hidden" especiais)
-  const formName = fields.form_name || fields.form_title || ""
-  const formId   = fields.form_id   || ""
-  const pageUrl  = fields.page_url  || fields.referer || req.headers.get("referer") || ""
+  // Metadata do form
+  const formName = fields.form_name || fields.form_title ||
+                   (fields.rd_event ? fields.rd_event.replace(/\/$/, "") : "") || ""
+  const formId   = fields.form_id   || fields.post_id || ""
+  const pageUrl  = fields.pagina    || fields.page_url || fields.referer || req.headers.get("referer") || ""
   const pageSlug = extractPageSlug(pageUrl)
 
   const name  = pickField(fields, "name")
@@ -125,14 +128,16 @@ export async function POST(req: NextRequest) {
   }
 
   // Todos os fields do form pra debug + exibição (exceto metadata Elementor)
-  const metaKeys = new Set(["form_name", "form_title", "form_id", "page_url", "page_title", "referer"])
+  const metaKeys = new Set(["form_name", "form_title", "form_id", "page_url", "pagina", "page_title", "referer", "post_id", "rd_event", "Submit", "origem_lead"])
   const formFields = Object.entries(fields)
     .filter(([k]) => !metaKeys.has(k))
     .map(([k, v]) => ({ name: k, value: v }))
 
+  const source = req.nextUrl.searchParams.get("source") || (qsSecret ? "jetengine" : "elementor")
+
   const record: LpLeadRecord = {
     id: crypto.randomUUID(),
-    source: "elementor",
+    source,
     form_id: formId,
     form_name: formName,
     page_slug: pageSlug,
@@ -150,17 +155,19 @@ export async function POST(req: NextRequest) {
     utm_content:  fields.utm_content,
     utm_term:     fields.utm_term,
     rd_event:     fields.rd_event,
+    origem_lead:  fields.origem_lead,
 
     form_fields: formFields,
   }
 
   const saved = await appendLpLeadSafe(lpDateKey(), record)
 
-  // Se salvou novo lead: em background, espera 5 min e aciona check
+  // Se salvou novo lead: em background, espera 5 min e aciona check.
+  // Node runtime (Coolify): fire-and-forget. maxDuration=480 segura o processo.
   if (saved) {
     const host = req.headers.get("host") || "saleszone.vercel.app"
     const baseUrl = `https://${host}`
-    waitUntil(delayedCheck(baseUrl))
+    delayedCheck(baseUrl).catch(err => console.error("[audit-lp] delayedCheck:", err))
   }
 
   return NextResponse.json({ ok: true, saved, id: record.id })

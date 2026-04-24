@@ -7,6 +7,7 @@ export async function middleware(request: NextRequest) {
   if (
     request.nextUrl.pathname.startsWith("/api/growth/audit-mql/") ||
     request.nextUrl.pathname.startsWith("/api/growth/audit-ctwpp/") ||
+    request.nextUrl.pathname.startsWith("/api/growth/audit-lp/") ||
     (process.env.NODE_ENV === "development" && request.nextUrl.pathname === "/growth/audit-mql")
   ) {
     return NextResponse.next();

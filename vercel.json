@@ -17,6 +17,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/growth/audit-lp/recovery",
+      "schedule": "*/30 * * * *"
+    },
+    {
       "path": "/api/growth/audit-ctwpp/run",
       "schedule": "5 13 * * *"
     }

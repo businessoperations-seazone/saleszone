@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob"
+import { putBlob, fetchBlobJson } from "@/lib/blob"
 import { MiaErrorInfo } from "@/lib/audit-mql"
 
 // Lead vindo de Landing Page WordPress via Elementor Forms → webhook saleszone
@@ -8,7 +8,7 @@ import { MiaErrorInfo } from "@/lib/audit-mql"
 
 export interface LpLeadRecord {
   id: string
-  source: "elementor"
+  source: "elementor" | "jetengine" | string
   form_id: string            // ID do form no Elementor (ou slug)
   form_name: string          // Nome do form (definido no Elementor)
   page_slug: string          // Slug da LP (ex: "novos-proprietarios")
@@ -26,6 +26,7 @@ export interface LpLeadRecord {
   utm_content?: string
   utm_term?: string
   rd_event?: string
+  origem_lead?: string
 
   // Todos os campos do form (para exibição + debug)
   form_fields?: { name: string; value: string }[]
@@ -38,6 +39,10 @@ export interface LpLeadRecord {
   mia_error?: MiaErrorInfo   // reusa o mesmo shape do audit-mql
   checked_at?: string
   notified?: boolean         // evita Slack duplicado
+
+  // Verificações adicionais (mesmas do audit-mql)
+  in_baserow?: boolean                           // true = chegou, false = não chegou, undefined = não verificado
+  nekt_status?: "ok" | "nao_encontrado"          // verificado pelo nekt-check cron
 
   // Flag de origem no recovery: true = audit foi backfilled via Pipedrive
   recovered_from_pipedrive?: boolean
@@ -62,7 +67,7 @@ const FORM_NAME_VERTICAL_MAP: Record<string, string> = {
 }
 
 const PAGE_SLUG_VERTICAL_MAP: Record<string, string> = {
-  "novos-proprietarios": "Investimentos",
+  "novos-proprietarios": "Serviços",
   "servicos":            "Serviços",
   "marketplace":         "Marketplace",
   "hospedes":            "Hóspedes",
@@ -85,41 +90,44 @@ export function extractLpVertical(formName: string, pageSlug: string): string {
   return "Outros"
 }
 
-// ─── Storage (Vercel Blob) ────────────────────────────────────────────────────
+// ─── Storage (Supabase Storage via @/lib/blob, com fallback local em dev) ────
 
-const BLOB_STORE_URL = process.env.BLOB_URL || ""
+const IS_DEV = process.env.NODE_ENV === "development"
 
 export function lpDateKey(date?: Date): string {
   const d = date || new Date()
-  // Usa API nativa de timezone — robusta a mudanças de horário de verão e
-  // alterações futuras do fuso. O offset fixo de -3h quebraria caso o Brasil
-  // voltasse a adotar DST ou a conversão fosse feita em ambiente UTC.
-  // sv-SE formato: "YYYY-MM-DD HH:mm:ss" — slice(0,10) pega só a data.
+  // Usa API nativa de timezone — robusta a mudanças de horário de verão.
+  // sv-SE formato: "YYYY-MM-DD HH:mm:ss".
   return d.toLocaleString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 10)
 }
 
-export async function readLpLeads(key: string): Promise<LpLeadRecord[]> {
-  if (!BLOB_STORE_URL) return []
-  const token = process.env.BLOB_READ_WRITE_TOKEN || ""
+// Em dev: lê de tmp-dev/audit-lp/{key}.json (blob indisponível localmente)
+async function devRead(key: string): Promise<LpLeadRecord[]> {
+  const fs = await import("fs/promises")
+  const path = await import("path")
   try {
-    const res = await fetch(`${BLOB_STORE_URL}/audit-lp/${key}.json`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) return []
-    return await res.json()
-  } catch {
-    return []
-  }
+    const data = await fs.readFile(path.join(process.cwd(), "tmp-dev", "audit-lp", `${key}.json`), "utf-8")
+    return JSON.parse(data)
+  } catch { return [] }
+}
+
+async function devWrite(key: string, leads: LpLeadRecord[]) {
+  const fs = await import("fs/promises")
+  const path = await import("path")
+  const dir = path.join(process.cwd(), "tmp-dev", "audit-lp")
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(path.join(dir, `${key}.json`), JSON.stringify(leads, null, 2))
+}
+
+export async function readLpLeads(key: string): Promise<LpLeadRecord[]> {
+  if (IS_DEV) return devRead(key)
+  const d = await fetchBlobJson<LpLeadRecord[]>(`audit-lp/${key}.json`)
+  return d ?? []
 }
 
 export async function writeLpLeads(key: string, leads: LpLeadRecord[]) {
-  await put(`audit-lp/${key}.json`, JSON.stringify(leads), {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  })
+  if (IS_DEV) return devWrite(key, leads)
+  await putBlob(`audit-lp/${key}.json`, leads)
 }
 
 // Dedup: mesmo email+phone no mesmo dia é tratado como o mesmo lead

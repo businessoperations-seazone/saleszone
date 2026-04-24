@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { createSquadSupabaseAdmin, hasServiceRole } from "@/lib/squad/supabase";
 import { createAuthenticatedSupabaseAdmin } from "@/lib/supabase/server";
 import { paginate } from "@/lib/paginate";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 import type { GeralData, GeralChannelResult, GeralMetricPair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -79,6 +79,8 @@ export async function GET(req: NextRequest) {
     const month = now.getMonth();
     const monthKey = `${year}-${String(month + 1).padStart(2, "0")}`;
     const startDate = `${monthKey}-01`;
+    const nextMonthDate = new Date(year, month + 1, 1);
+    const nextMonthStart = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, "0")}-01`;
 
     const prevDate = new Date(year, month - 1, 1);
     const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, "0")}`;
@@ -176,32 +178,42 @@ export async function GET(req: NextRequest) {
     console.log(`[geral] channelCounts VD: mql=${channelCounts["Vendas Diretas"].mql}, sql=${channelCounts["Vendas Diretas"].sql}, opp=${channelCounts["Vendas Diretas"].opp}, won=${channelCounts["Vendas Diretas"].won}`);
     console.log(`[geral] channelCounts Parceiros: mql=${channelCounts.Parceiros.mql}, sql=${channelCounts.Parceiros.sql}, opp=${channelCounts.Parceiros.opp}, won=${channelCounts.Parceiros.won}`);
 
-    // ── 2. Reserva/Contrato acumulado from squad_deals (stage-based, não date-based) ──
-    const deals = await paginate((o, ps) =>
-      admin
-        .from("squad_deals")
-        .select("canal, max_stage_order, stage_order, status, lost_reason, won_time")
-        .not("empreendimento", "is", null)
-        .or(`status.eq.open,won_time.gte.${startDate},lost_time.gte.${startDate},add_time.gte.${startDate}`)
-        .range(o, o + ps - 1),
-    );
-    console.log(`[geral] squad_deals returned ${deals.length} deals (for reserva/contrato)`);
+    // ── 2. Reserva/Contrato por data de entrada na etapa (match Pipedrive "data de entrada na etapa") ──
+    const [reservaDeals, contratoDeals] = await Promise.all([
+      paginate((o, ps) =>
+        admin
+          .from("squad_deals")
+          .select("canal, lost_reason")
+          .not("empreendimento", "is", null)
+          .gte("reserva_entered_at", startDate)
+          .lt("reserva_entered_at", nextMonthStart)
+          .range(o, o + ps - 1),
+      ),
+      paginate((o, ps) =>
+        admin
+          .from("squad_deals")
+          .select("canal, lost_reason")
+          .not("empreendimento", "is", null)
+          .gte("contrato_entered_at", startDate)
+          .lt("contrato_entered_at", nextMonthStart)
+          .range(o, o + ps - 1),
+      ),
+    ]);
+    console.log(`[geral] reservaDeals=${reservaDeals.length} contratoDeals=${contratoDeals.length}`);
 
-    for (const d of deals) {
+    for (const d of reservaDeals) {
       if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = d.max_stage_order ?? d.stage_order ?? 0;
       const macro = getMacroChannel(d.canal);
-      // Reserva/Contrato acumulado (stage-based) — todos os canais no Geral
-      if (mso >= TH_RESERVA) channelCounts.Geral.reserva++;
-      if (mso >= TH_CONTRATO) channelCounts.Geral.contrato++;
-      if (macro === "Parceiros") {
-        if (mso >= TH_RESERVA) channelCounts.Parceiros.reserva++;
-        if (mso >= TH_CONTRATO) channelCounts.Parceiros.contrato++;
-      }
-      if (macro === "Vendas Diretas") {
-        if (mso >= TH_RESERVA) channelCounts["Vendas Diretas"].reserva++;
-        if (mso >= TH_CONTRATO) channelCounts["Vendas Diretas"].contrato++;
-      }
+      channelCounts.Geral.reserva++;
+      if (macro === "Parceiros") channelCounts.Parceiros.reserva++;
+      if (macro === "Vendas Diretas") channelCounts["Vendas Diretas"].reserva++;
+    }
+    for (const d of contratoDeals) {
+      if (d.lost_reason === "Duplicado/Erro") continue;
+      const macro = getMacroChannel(d.canal);
+      channelCounts.Geral.contrato++;
+      if (macro === "Parceiros") channelCounts.Parceiros.contrato++;
+      if (macro === "Vendas Diretas") channelCounts["Vendas Diretas"].contrato++;
     }
 
     // ── 3. Previous month WON ──
@@ -232,31 +244,50 @@ export async function GET(req: NextRequest) {
       if (macro === "Vendas Diretas" || macro === "Parceiros") prevWon[macro]++;
     }
 
-    // ── 4. Meta Ads spend + leads (Vendas Diretas only) ──
-    const metaRows = await paginate((o, ps) =>
-      supabase
-        .from("squad_meta_ads")
-        .select("ad_id, spend_month, leads_month")
-        .gte("snapshot_date", startDate)
-        .range(o, o + ps - 1),
-    );
-    const adMax = new Map<string, { spend: number; leads: number }>();
-    for (const r of metaRows) {
-      const spend = Number(r.spend_month) || 0;
-      const leads = Number(r.leads_month) || 0;
-      const cur = adMax.get(r.ad_id);
-      if (!cur || spend > cur.spend) adMax.set(r.ad_id, { spend, leads });
-    }
-    let totalSpend = 0, totalLeads = 0;
-    for (const v of adMax.values()) { totalSpend += v.spend; totalLeads += v.leads; }
+    // ── 4. Orçamento: meta vem do squad_orcamento (input do usuário na tela de
+    //                 Orçamento). Gasto real vem do Nekt (FB+Google consolidado).
+    // Nekt orcamento_mkt_szi_szs_mktp... é uma tabela de Finance que NÃO reflete
+    // a meta configurada pelo BizOps — a meta autoritativa está em squad_orcamento.
+    let orcamentoMeta = 0;
+    let totalSpend = 0;
 
-    // ── 5. Orçamento ──
+    // Meta: squad_orcamento (user-defined), Nekt só como fallback se vazio
     const { data: orcData } = await supabase
       .from("squad_orcamento")
       .select("orcamento_total")
       .eq("mes", monthKey)
       .maybeSingle();
-    const orcamentoMeta = orcData?.orcamento_total || 0;
+    orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+
+    // Gasto: Nekt (vertical='Investimentos')
+    try {
+      const budget = await getNektBudget(
+        "Investimentos",
+        "ads_proprietario",
+        startDate,
+        nextMonthStart,
+      );
+      totalSpend = budget.spend;
+      // Fallback: se squad_orcamento vazio, usa meta do Nekt
+      if (!orcamentoMeta) orcamentoMeta = Math.round(budget.orcamento);
+      console.log(`[geral] SZI: meta=${orcamentoMeta} (squad_orcamento${orcamentoMeta === Math.round(budget.orcamento) ? ' fallback Nekt' : ''}) spend=${Math.round(totalSpend)} (Nekt)`);
+    } catch (e) {
+      console.warn("[geral] Nekt spend query failed, fallback para squad_meta_ads:", e);
+      const metaRows = await paginate((o, ps) =>
+        supabase
+          .from("squad_meta_ads")
+          .select("ad_id, spend_month")
+          .gte("snapshot_date", startDate)
+          .range(o, o + ps - 1),
+      );
+      const adMax = new Map<string, number>();
+      for (const r of metaRows) {
+        const spend = Number(r.spend_month) || 0;
+        const cur = adMax.get(r.ad_id) || 0;
+        if (spend > cur) adMax.set(r.ad_id, spend);
+      }
+      for (const v of adMax.values()) totalSpend += v;
+    }
 
     // ── 6. Pipedrive daily snapshot (from pipedrive_daily_snapshot table, updated 1x/day) ──
     const today = now.toISOString().substring(0, 10);
@@ -466,10 +497,10 @@ export async function GET(req: NextRequest) {
       const nektStages = await queryNekt(`
         SELECT *
         FROM nekt_silver.pipedrive_deals_readable
-        WHERE status = 'open' AND pipeline_id = 28 AND CAST(etapa AS INTEGER) IN (191, 192)
+        WHERE status = 'open' AND pipeline_id = 28 AND CAST(stage AS INTEGER) IN (191, 192)
       `);
       for (const r of nektStages.rows) {
-        const sid = parseInt(String(r.etapa || "0"));
+        const sid = parseInt(String(r.stage || "0"));
         const canalId = String(r.canal_id ?? r.canal ?? "");
         const macro = getMacroChannel(canalId);
         if (sid === 191) {
@@ -518,7 +549,7 @@ export async function GET(req: NextRequest) {
         FROM nekt_silver.pipedrive_deals_readable
         WHERE status = 'open'
           AND pipeline_id = 28
-          AND CAST(etapa AS INTEGER) = 187
+          AND CAST(stage AS INTEGER) = 187
       `);
       console.log(`[geral/agendados] Nekt rows: ${nektResult.rows.length}, columns: ${nektResult.columns.join(", ")}`);
       for (const r of nektResult.rows) {

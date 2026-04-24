@@ -103,7 +103,7 @@ export async function GET(req: NextRequest) {
 
     const admin = createSquadSupabaseAdmin();
 
-    const [metaRes, metasRes, allDealsRes] = await Promise.all([
+    const [metaRes, metasRes] = await Promise.all([
       supabase
         .from("mktp_meta_ads")
         .select("ad_id, empreendimento, impressions, clicks, leads_month, spend_month")
@@ -112,22 +112,22 @@ export async function GET(req: NextRequest) {
         .from("mktp_metas")
         .select("squad_id, tab, meta")
         .eq("month", `${month}-01`),
-      // All deals for counts by empreendimento
-      fetchAll(admin.from("mktp_deals").select("empreendimento, max_stage_order, status, lost_reason")),
     ]);
 
     if (metaRes.error) throw new Error(`Meta Ads query error: ${metaRes.error.message}`);
     if (metasRes.error) console.warn(`Metas query warning: ${metasRes.error.message}`);
 
-    // Fetch MQL/SQL/OPP/WON from mktp_deals (not mktp_daily_counts — avoids aggregation gap)
-    const [mqlDealsRes, sqlDealsRes, oppDealsRes, wonDealsRes] = await Promise.all([
+    // Cada etapa pela data correspondente — matching SZI.
+    const [mqlDealsRes, sqlDealsRes, oppDealsRes, wonDealsRes, reservaDealsRes, contratoDealsRes] = await Promise.all([
       fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("add_time", startDate)),
       fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("qualificacao_date", startDate)),
       fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("reuniao_date", startDate)),
       fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("won_time", startDate)),
+      fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("reserva_entered_at", startDate)),
+      fetchAll(admin.from("mktp_deals").select("empreendimento, lost_reason").gte("contrato_entered_at", startDate)),
     ]);
 
-    // Build counts by empreendimento from mktp_deals
+    // Build counts by empreendimento
     const countsMap = new Map<string, { mql: number; sql: number; opp: number; won: number; reserva: number; contrato: number }>();
     function addToEmp(emp: string, mql = 0, sql = 0, opp = 0, won = 0, reserva = 0, contrato = 0) {
       const key = emp || "Outros";
@@ -139,14 +139,8 @@ export async function GET(req: NextRequest) {
     for (const d of sqlDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 1, 0, 0, 0, 0); }
     for (const d of oppDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 1, 0, 0, 0); }
     for (const d of wonDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 0, 1, 0, 0); }
-    // Reserva (stage_order >= 13) / Contrato (stage_order >= 14) from all closed deals
-    const closedDeals = allDealsRes.filter(d => d.status === "won" || d.status === "lost");
-    for (const d of closedDeals) {
-      if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = d.max_stage_order || 0;
-      if (mso >= 13) addToEmp(d.empreendimento, 0, 0, 0, 0, 1, 0);
-      if (mso >= 14) addToEmp(d.empreendimento, 0, 0, 0, 0, 0, 1);
-    }
+    for (const d of reservaDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 0, 0, 1, 0); }
+    for (const d of contratoDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToEmp(d.empreendimento, 0, 0, 0, 0, 0, 1); }
 
     // Agregar Meta Ads: max spend_month/leads_month por ad
     const adMax = new Map<string, { empreendimento: string; impressions: number; clicks: number; leads_month: number; spend_month: number }>();

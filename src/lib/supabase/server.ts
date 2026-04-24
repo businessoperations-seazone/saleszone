@@ -5,10 +5,12 @@ import { NextRequest } from "next/server";
 export async function createClient() {
   const cookieStore = await cookies();
 
+  const schema = process.env.NEXT_PUBLIC_DB_SCHEMA || "public";
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      db: { schema },
       cookies: {
         getAll() {
           return cookieStore.getAll();
@@ -33,10 +35,12 @@ export async function createClient() {
  * in RLS policies (e.g. email domain checks).
  */
 export async function createAuthenticatedSupabaseAdmin(request: NextRequest) {
+  const schema = process.env.NEXT_PUBLIC_DB_SCHEMA || "public";
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      db: { schema },
       cookies: {
         getAll() {
           return request.cookies.getAll();

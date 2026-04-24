@@ -12,10 +12,12 @@ export async function updateSession(request: NextRequest) {
 
   let supabaseResponse = NextResponse.next({ request });
 
+  const schema = process.env.NEXT_PUBLIC_DB_SCHEMA || "public";
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      db: { schema },
       cookies: {
         getAll() {
           return request.cookies.getAll();

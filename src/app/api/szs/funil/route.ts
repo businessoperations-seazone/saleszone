@@ -115,8 +115,9 @@ export async function GET(req: NextRequest) {
       fetchAll(admin.from("szs_deals").select("empreendimento, canal, max_stage_order, status, lost_reason").gte("add_time", startDate)),
       // Paid deals (canal=12, paid source) for funnel metrics
       fetchAll(admin.from("szs_deals").select("canal, max_stage_order, status, lost_reason").eq("canal", "12").ilike("rd_source", "%pag%").gte("add_time", startDate)),
-      // All form fills from baserow (leads, not qualified)
-      fetchAll(admin.from("baserow_szs_leads").select("cidade").gte("data_criacao_ads", startDate).lt("data_criacao_ads", mesFim)),
+      // All form fills from baserow (leads, not qualified). Graceful fallback se a tabela ausente (staging).
+      fetchAll(admin.from("baserow_szs_leads").select("cidade").gte("data_criacao_ads", startDate).lt("data_criacao_ads", mesFim))
+        .catch((err) => { console.warn("[szs/funil] baserow_szs_leads indisponível:", err?.message); return []; }),
     ]);
 
     // Count MQL/SQL/OPP/WON from szs_deals directly (not szs_daily_counts — avoids aggregation gap)
@@ -126,8 +127,12 @@ export async function GET(req: NextRequest) {
     const wonDeals = fetchAll(admin.from("szs_deals").select("canal, lost_reason").gte("won_time", startDate));
     const [mqlDealsRes, sqlDealsRes, oppDealsRes, wonDealsRes] = await Promise.all([mqlDeals, sqlDeals, oppDeals, wonDeals]);
 
-    // Reserva/Contrato: deals with max_stage_order >= 13/14 (accumulated from szs_deals)
-    const allClosedDeals = allDealsRes.filter(d => d.status === "won" || d.status === "lost");
+    // Reserva/Contrato: deals que ENTRARAM na etapa Aguardando Dados (152) / Contrato (76)
+    // no mês via reserva_entered_at / contrato_entered_at (Nekt consolidated_deal_flow).
+    const [reservaMesRes, contratoMesRes] = await Promise.all([
+      fetchAll(admin.from("szs_deals").select("canal, lost_reason").gte("reserva_entered_at", startDate)),
+      fetchAll(admin.from("szs_deals").select("canal, lost_reason").gte("contrato_entered_at", startDate)),
+    ]);
 
     // Build counts by canal_group from szs_deals
     const countsByCanal = new Map<string, { mql: number; sql: number; opp: number; won: number; reserva: number; contrato: number }>();
@@ -141,12 +146,13 @@ export async function GET(req: NextRequest) {
     for (const d of sqlDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 1, 0, 0, 0, 0); }
     for (const d of oppDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 1, 0, 0, 0); }
     for (const d of wonDealsRes) { if (d.lost_reason !== "Duplicado/Erro") addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 0, 1, 0, 0); }
-    // Reserva/contrato counts use allDealsRes (has max_stage_order)
-    for (const d of allClosedDeals) {
+    for (const d of reservaMesRes) {
       if (d.lost_reason === "Duplicado/Erro") continue;
-      const mso = d.max_stage_order || 0;
-      if (mso >= 13) addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 0, 0, 1, 0);
-      if (mso >= 14) addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 0, 0, 0, 1);
+      addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 0, 0, 1, 0);
+    }
+    for (const d of contratoMesRes) {
+      if (d.lost_reason === "Duplicado/Erro") continue;
+      addToCanal(CANAL_NUM_TO_GROUP[d.canal] || DEFAULT_GROUP, 0, 0, 0, 0, 0, 1);
     }
 
     // Bridge: primary canal per cidade (canal with most qualified deals from that cidade)
@@ -193,8 +199,9 @@ export async function GET(req: NextRequest) {
       if (!paidCountsMap.has(canal)) paidCountsMap.set(canal, { mql: 0, sql: 0, opp: 0, won: 0 });
       const cur = paidCountsMap.get(canal)!;
       cur.mql++;
+      // SZS pipeline (14): SQL=Qualificado (order 4), OPP=Reunião Realizada (order 8).
       if (d.max_stage_order >= 4) cur.sql++;
-      if (d.max_stage_order >= 9) cur.opp++;
+      if (d.max_stage_order >= 8) cur.opp++;
       if (d.status === "won") cur.won++;
     }
 

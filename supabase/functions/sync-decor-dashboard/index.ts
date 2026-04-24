@@ -1,47 +1,7 @@
-// MKTP (Marketplace) module — auto-generated from SZI equivalent
+// SZS (Serviços) module — auto-generated from SZI equivalent
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// SUPABASE_REF derivado do env SUPABASE_URL em runtime (ex: https://gamswizeexihaymfweeq.supabase.co → gamswizeexihaymfweeq)
-const SUPABASE_REF = (Deno.env.get("SUPABASE_URL") || "").replace(/^https?:\/\//, "").split(".")[0];
-
-// params uses array of [key, value] pairs to support duplicate keys (e.g. date=gte&date=lte)
-async function restDelete(svcKey: string, table: string, params: [string, string][]): Promise<{ error: string | null }> {
-  const url = new URL(`https://${SUPABASE_REF}.supabase.co/rest/v1/${table}`);
-  for (const [k, v] of params) {
-    url.searchParams.append(k, v);
-  }
-  const res = await fetch(url.toString(), {
-    method: "DELETE",
-    headers: { "apikey": svcKey, "Authorization": `Bearer ${svcKey}` },
-  });
-  if (!res.ok) { const body = await res.text(); return { error: `${res.status} ${body}` }; }
-  return { error: null };
-}
-
-async function restInsert(svcKey: string, table: string, rows: any[]): Promise<{ error: string | null; inserted: number }> {
-  if (rows.length === 0) return { error: null, inserted: 0 };
-  const res = await fetch(`https://${SUPABASE_REF}.supabase.co/rest/v1/${table}`, {
-    method: "POST",
-    headers: { "apikey": svcKey, "Authorization": `Bearer ${svcKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify(rows),
-  });
-  if (res.status === 201) return { error: null, inserted: rows.length };
-  const body = await res.text();
-  return { error: `${res.status} ${body.substring(0, 200)}`, inserted: 0 };
-}
-
-async function restUpsert(svcKey: string, table: string, rows: any[], onConflict: string): Promise<{ error: string | null; inserted: number }> {
-  if (rows.length === 0) return { error: null, inserted: 0 };
-  const res = await fetch(`https://${SUPABASE_REF}.supabase.co/rest/v1/${table}?on_conflict=${onConflict}`, {
-    method: "POST",
-    headers: { "apikey": svcKey, "Authorization": `Bearer ${svcKey}`, "Content-Type": "application/json", "Prefer": `resolution=merge-duplicates` },
-    body: JSON.stringify(rows),
-  });
-  if (res.ok) return { error: null, inserted: rows.length };
-  const body = await res.text();
-  return { error: `${res.status} ${body.substring(0, 200)}`, inserted: 0 };
-}
-
+let DB_SCHEMA = "public";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -50,24 +10,17 @@ const corsHeaders = {
 // ---- Pipedrive constants ----
 const PIPEDRIVE_DOMAIN = "seazone-fd92b9.pipedrive.com";
 const BASE = `https://${PIPEDRIVE_DOMAIN}/api/v1`;
-const PIPELINE_ID = 37;
+const PIPELINE_ID = 44;
 const FIELD_CANAL = "93b3ada8b94bd1fc4898a25754d6bcac2713f835";
 const FIELD_EMPREENDIMENTO = "6d565fd4fce66c16da078f520a685fa2fa038272";
+const FIELD_CIDADE = "45a56c6ae1f43dad4992c3c23d4a2a32787d93d6";
+const FIELD_BAIRRO = "b080625d5e1ec11f518490717bfa9d22d393f036";
 const FIELD_QUALIFICACAO = "bc74bcc4326527cbeb331d1697d4c8812d68506e";
 const FIELD_REUNIAO = "bfafc352c5c6f2edbaa41bf6d1c6daa825fc9c16";
-const CANAL_MARKETING_ID = "12";
-
-/* ── Canal-group mapping for Resultados MKTP ── */
-const MKTP_CANAL_GROUPS: Record<string, string> = {
-  "582": "Parcerias",    // Indicação de Corretor
-  "583": "Parcerias",    // Indicação de Franquia
-  "2876": "Parcerias",   // Indicação de Outros Parceiros
-};
-
-function getCanalGroup(deal: any): string {
-  const canal = String(deal[FIELD_CANAL] || "");
-  return MKTP_CANAL_GROUPS[canal] || "Vendas Diretas";
-}
+// Canal group mapping: groups deals by channel for SZS module
+// Decor pipeline 44 — no meaningful canal split, everything is "Outros"
+const CANAL_GROUPS: Record<string, string> = {};
+// Any canal ID not in this map → "Outros"
 const EMPREENDIMENTO_MAP: Record<string, string> = {
   "3313": "Altavista",
   "1132": "Barra de São Miguel Spot",
@@ -133,9 +86,320 @@ const EMPREENDIMENTO_MAP: Record<string, string> = {
   "2745": "VN Ueno",
   "3309": "Zn Barra",
 };
-// MKTP team: single squad with 2 closers (Nevine Saratt, Willian Miranda)
+const CIDADE_MAP: Record<string, string> = {
+  "1465": "Alagoinhas, BA",
+  "607": "Alfredo Wagner, SC",
+  "1781": "Alto Paraíso de Goiás, GO",
+  "2255": "Anchieta, ES",
+  "434": "Angra dos Reis, RJ",
+  "650": "Anitápolis, SC",
+  "4170": "Anápolis, GO",
+  "2484": "Aparecida de Goiânia, GO",
+  "3319": "Aparecida, SP",
+  "2515": "Apiúna, SC",
+  "3265": "Aquiraz, CE",
+  "2196": "Aracaju, SE",
+  "2680": "Aracati, CE",
+  "2563": "Aragoiânia, GO",
+  "2468": "Arapiraca, AL",
+  "2383": "Araranguá, SC",
+  "2469": "Araraquara, SP",
+  "2074": "Araruama, RJ",
+  "2629": "Araçariguama, SP",
+  "2153": "Arcoverde, PE",
+  "196": "Armação dos Búzios, RJ",
+  "436": "Arraial do Cabo, RJ",
+  "2666": "Atibaia, SP",
+  "2478": "Balneário Barra do Sul, SC",
+  "158": "Balneário Camboriú, SC",
+  "2455": "Balneário Pinhal, RS",
+  "431": "Balneário Piçarras, SC",
+  "2734": "Barra de Santo Antônio, AL",
+  "1079": "Barra de São Miguel, AL",
+  "1939": "Barra Mansa, RJ",
+  "1905": "Barra Velha, SC",
+  "1463": "Barreiras, BA",
+  "1940": "Barreirinhas, MA",
+  "4654": "Barueri, SP",
+  "632": "Bauru, SP",
+  "2667": "Baía Formosa, RN",
+  "3264": "Beberibe, CE",
+  "1901": "Belmonte, BA",
+  "1421": "Belo Horizonte, MG",
+  "3263": "Belém, PA",
+  "854": "Bento Gonçalves, RS",
+  "258": "Bertioga, SP",
+  "2470": "Bezerros, PE",
+  "1911": "Biguaçu, SC",
+  "2630": "Biritiba Mirim, SP",
+  "1848": "Blumenau, SC",
+  "2479": "Bom Jardim da Serra, SC",
+  "612": "Bom Retiro, SC",
+  "161": "Bombinhas, SC",
+  "3262": "Bonito, MS",
+  "2681": "Bragança Paulista, SP",
+  "1740": "Brasília, DF",
+  "2140": "Braço do Norte, SC",
+  "2608": "Brusque, SC",
+  "2184": "Cabedelo, PB",
+  "2489": "Cabo de Santo Agostinho, PE",
+  "235": "Cabo Frio, RJ",
+  "1912": "Cachoeira Paulista, SP",
+  "2631": "Cachoeiras de Macacu, RJ",
+  "1913": "Cachoeirinha, RS",
+  "440": "Cairu, BA",
+  "3261": "Cajueiro da Praia, PI",
+  "1387": "Caldas Novas, GO",
+  "3260": "Camanducaia, MG",
+  "1043": "Camaçari, BA",
+  "1853": "Camboriú, SC",
+  "2712": "Camorim, RJ",
+  "1914": "Campinas, SP",
+  "2388": "Campo Alegre, SC",
+  "1941": "Campo Grande, MS",
+  "233": "Campos do Jordão, SP",
+  "1791": "Canavieiras, BA",
+  "2222": "Candeias, BA",
+  "225": "Canela, RS",
+  "2115": "Canoas, RS",
+  "850": "Capão da Canoa, RS",
+  "425": "Caraguatatuba, SP",
+  "2223": "Caravelas, BA",
+  "1849": "Caruaru, PE",
+  "1978": "Casimiro de Abreu, RJ",
+  "4533": "Catalão, GO",
+  "2735": "Caucaia, CE",
+  "845": "Caxias do Sul, RS",
+  "2389": "Chapecó, SC",
+  "3259": "Conde, BA",
+  "2682": "Conde, PB",
+  "1422": "Conselheiro Lafaiete, MG",
+  "2312": "Coruripe, AL",
+  "2632": "Cotia, SP",
+  "2930": "Criciúma, SC",
+  "3258": "Cruz, CE",
+  "1742": "Cuiabá, MT",
+  "1887": "Curitiba, PR",
+  "2609": "Delfinópolis, MG",
+  "4289": "Dourados, MS",
+  "1915": "Duque de Caxias, RJ",
+  "2683": "Embu Guaçu, SP",
+  "1916": "Entre Rios, BA",
+  "1761": "Eunápolis, BA",
+  "1466": "Feira de Santana, BA",
+  "119": "Florianópolis, SC",
+  "1917": "Fortaleza, CE",
+  "3257": "Fortim, CE",
+  "2480": "Foz do Iguaçu, PR",
+  "3256": "Garibaldi, RS",
+  "239": "Garopaba, SC",
+  "2684": "Goianira, GO",
+  "1743": "Goiás, GO",
+  "1744": "Goiânia, GO",
+  "1946": "Gonçalves, MG",
+  "432": "Governador Celso Ramos, SC",
+  "4172": "Governador Valadares, MG",
+  "224": "Gramado, RS",
+  "2713": "Gravatá, PE",
+  "2337": "Guapimirim, RJ",
+  "2102": "Guaramiranga, CE",
+  "1448": "Guarapari, ES",
+  "2440": "Guaratinguetá, SP",
+  "3320": "Guaratuba, PR",
+  "1918": "Guarujá, SP",
+  "1919": "Guarulhos, SP",
+  "1769": "Guará, DF",
+  "2481": "Harmonia, RS",
+  "1745": "Hidrolândia, GO",
+  "1920": "Ibiúna, SP",
+  "2151": "Icapuí, CE",
+  "2543": "Iguape, SP",
+  "2714": "Ilha de Itamaracá, PE",
+  "426": "Ilhabela, SP",
+  "831": "Ilhéus, BA",
+  "241": "Imbituba, SC",
+  "2633": "Imbé, RS",
+  "1133": "Ipojuca, PE",
+  "1462": "Itabuna, BA",
+  "605": "Itacaré, BA",
+  "236": "Itajaí, SC",
+  "1850": "Itanhaém, SP",
+  "839": "Itaparica, BA",
+  "157": "Itapema, SC",
+  "2075": "Itapoá, SC",
+  "2150": "Itatiba, SP",
+  "2154": "Itatuba, PB",
+  "2268": "Itobi, SP",
+  "2076": "Itu, SP",
+  "4548": "Itumbiara, GO",
+  "1180": "Jaboatão dos Guararapes, PE",
+  "3137": "Jaguaruna, SC",
+  "590": "Japaratinga, AL",
+  "1921": "Jaraguá do Sul, SC",
+  "2610": "Jaú, SP",
+  "1464": "Jequié, BA",
+  "1254": "Joinville, SC",
+  "4649": "João Monlevade, MG",
+  "1406": "João Pessoa, PB",
+  "2116": "Juazeiro do Norte, CE",
+  "1467": "Juazeiro, BA",
+  "2141": "Juiz de Fora, MG",
+  "2931": "Lages, SC",
+  "1397": "Lauro de Freitas, BA",
+  "3255": "Lençóis, BA",
+  "2224": "Leopoldo Bulhões, GO",
+  "2155": "Londrina, PR",
+  "2715": "Luis Correia, PI",
+  "2668": "Luziânia, GO",
+  "2157": "Luís Eduardo Magalhães, BA",
+  "4619": "Macapá, AP",
+  "614": "Maceió, AL",
+  "2588": "Mairiporã, SP",
+  "1948": "Manaus, AM",
+  "437": "Mangaratiba, RJ",
+  "442": "Maragogi, AL",
+  "628": "Maraú, BA",
+  "1066": "Marechal Deodoro, AL",
+  "2471": "Marialva, PR",
+  "2564": "Maricá, RJ",
+  "1922": "Maringá, PR",
+  "649": "Mata de São João, BA",
+  "3254": "Matinhos, PR",
+  "2634": "Miguel Pereira, RJ",
+  "2185": "Mogi das Cruzes, SP",
+  "2441": "Mongaguá, SP",
+  "1851": "Natal, RN",
+  "2142": "Navegantes, SC",
+  "438": "Niterói, RJ",
+  "2313": "Nova Petrópolis, RS",
+  "2611": "Nova Prata, RS",
+  "2490": "Nova Santa Rita, RS",
+  "427": "Olímpia, SP",
+  "2371": "Orleans, SC",
+  "3253": "Ouro Preto, MG",
+  "177": "Outros",
+  "1168": "Palhoça, SC",
+  "1949": "Palmas, TO",
+  "2736": "Palmeira, SC",
+  "3252": "Palmeiras, BA",
+  "2472": "Paraipaba, CE",
+  "1852": "Paranavaí, PR",
+  "2491": "Paraty, RJ",
+  "1923": "Paripueira, AL",
+  "1886": "Passo de Camaragibe, AL",
+  "2669": "Paulista, PE",
+  "2589": "Pelotas, RS",
+  "433": "Penha, SC",
+  "2482": "Peruíbe, SP",
+  "439": "Petrópolis, RJ",
+  "1854": "Piatã, BA",
+  "1746": "Pirenópolis, GO",
+  "2152": "Pitimbu, PB",
+  "3251": "Pomerode, SC",
+  "1924": "Ponta Grossa, PR",
+  "4494": "Ponta Porã, MS",
+  "2612": "Pontal do Paraná, PR",
+  "392": "Porto Alegre, RS",
+  "159": "Porto Belo, SC",
+  "1724": "Porto de Pedras, AL",
+  "441": "Porto Seguro, BA",
+  "2156": "Pouso Alegre, MG",
+  "1142": "Poços de Caldas, MG",
+  "2186": "Prado, BA",
+  "242": "Praia do Rosa, SC",
+  "2402": "Praia Grande, SC",
+  "428": "Praia Grande, SP",
+  "4301": "Presidente Prudente, SP",
+  "613": "Rancho Queimado, SC",
+  "1179": "Recife, PE",
+  "2635": "Ribeirão das Neves, MG",
+  "630": "Ribeirão Preto, SP",
+  "2143": "Rio das Ostras, RJ",
+  "1202": "Rio de Janeiro, RJ",
+  "2565": "Rio do Sul, SC",
+  "3250": "Salinópolis, PA",
+  "653": "Salvador, BA",
+  "1177": "Santa Cruz Cabrália, BA",
+  "232": "Torres, RS",
+  "429": "Santos, SP",
+  "430": "São Sebastião, SP",
+  "384": "Ubatuba, SP",
+  "631": "São José do Rio Preto, SP",
+  "695": "Uberaba, MG",
+  "698": "Uberlândia, MG",
+  "455": "Urubici, SC",
+  "1058": "São Miguel dos Milagres, AL",
+  "1178": "Tamandaré, PE",
+  "1182": "Sinop, MT",
+  "1239": "Teixeira de Freitas, BA",
+  "1310": "São Paulo, SP",
+  "1461": "Vitória da Conquista, BA",
+  "1468": "Tibau do Sul, RN",
+  "1727": "Vitória, ES",
+  "1770": "Taguatinga, DF",
+  "1793": "Uruçuca, BA",
+  "1855": "Teresópolis, RJ",
+  "1856": "Vila Velha, ES",
+  "1858": "Tangará da Serra, MT",
+  "1885": "São Pedro da Aldeia, RJ",
+  "1899": "Teresina, PI",
+  "1925": "Sapucaí-Mirim, MG",
+  "1926": "São José, SC",
+  "1952": "São Carlos, SP",
+  "1976": "São Pedro de Alcântara, SC",
+  "1977": "São Francisco do Sul, SC",
+  "2098": "Sorocaba, SP",
+  "2099": "Toledo, PR",
+  "2103": "Santa Maria, RS",
+  "2104": "Volta Redonda, RJ",
+  "2144": "Santo Amaro da Imperatriz, SC",
+  "2187": "Santa Luzia, MG",
+  "2188": "São José dos Campos, SP",
+  "2189": "São Vicente, SP",
+  "2225": "Tubarão, SC",
+  "2328": "São José dos Pinhais, PR",
+  "2338": "Una, BA",
+  "2349": "Serra Negra, SP",
+  "2350": "São Bernardo do Campo, SP",
+  "2372": "Vassouras, RJ",
+  "2390": "Santo André, SP",
+  "2391": "Timbó, SC",
+  "2456": "São Leopoldo, RS",
+  "2473": "Santo Antônio da Patrulha, RS",
+  "2477": "Santo Amaro do Maranhão, MA",
+  "2544": "Serra, ES",
+  "2566": "São Joaquim, SC",
+  "2590": "São Caetano do Sul, SP",
+  "2591": "São Tomé das Letras, MG",
+  "2613": "São Francisco de Paula, RS",
+  "2636": "São Roque, SP",
+  "2637": "Vera Cruz, BA",
+  "2685": "Senador Canedo, GO",
+  "2686": "Vespasiano, MG",
+  "2716": "Timburi, SP",
+  "2717": "Unaí, MG",
+  "3247": "São Miguel do Gostosos, RN",
+  "3248": "São Luís, MA",
+  "3249": "Santarém, PA",
+  "4547": "Valença, BA",
+  "4650": "Santo Ângelo, RS",
+  "856": "Xangri-lá, RS",
+  "1771": "Águas Claras, DF",
+  "4676": "Três Rios, RJ",
+  "4677": "Primavera do Leste, MT",
+  "4679": "Indaiatuba, SP",
+  "4682": "Cascavel, PR",
+  "4683": "São João del Rei, MG",
+  "4815": "São Miguel do Gostoso, RN",
+  "4816": "Schroeder, SC",
+  "4817": "Itaitinga, CE",
+  "4818": "Ipióca, AL",
+  "4819": "Caeté, MG",
+  "4820": "Alfredo Chaves, ES",
+};
+// SZS team: single squad with 5 closers
 const SQUADS: Array<{ id: number; closers: number; empreendimentos: string[] }> = [
-  { id: 1, closers: 2, empreendimentos: Object.values(EMPREENDIMENTO_MAP) },
+  { id: 1, closers: 5, empreendimentos: Object.values(EMPREENDIMENTO_MAP) },
 ];
 const TOTAL_CLOSERS = SQUADS.reduce((sum, sq) => sum + sq.closers, 0);
 const TABS = ["mql", "sql", "opp", "won"] as const;
@@ -143,11 +407,12 @@ const ALL_TABS = ["mql", "sql", "opp", "won", "reserva", "contrato"] as const;
 type Tab = typeof TABS[number];
 type AllTab = typeof ALL_TABS[number];
 
-// Stage IDs for Reserva and Contrato
-const STAGE_RESERVA = 305;
-const STAGE_CONTRATO = 271;
+// Stage IDs for Aguardando Dados and Contrato
+// SZS uses "Aguardando Dados" (stage 152) instead of "Reserva"
+const STAGE_RESERVA = 152;  // "Aguardando Dados"
+const STAGE_CONTRATO = 76;  // "Contrato"
 
-const PIPELINE_STAGES: number[] = [336, 335, 334, 347, 333, 284, 337, 274, 308, 309, 393, 305, 271];
+const PIPELINE_STAGES: number[] = [70, 71, 72, 345, 341, 73, 342, 151, 74, 75, 152, 76];
 
 // ---- Pipedrive API ----
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -180,13 +445,25 @@ function getDateField(deal: any, tab: Tab): string | null {
   }
 }
 
-function isMarketingDeal(deal: any) {
-  return String(deal[FIELD_CANAL]) === CANAL_MARKETING_ID;
+function getCanalGroup(deal: any): string {
+  const canal = String(deal[FIELD_CANAL] || "");
+  return CANAL_GROUPS[canal] || "Outros";
 }
 
 function getEmpreendimento(deal: any) {
   const enumId = String(deal[FIELD_EMPREENDIMENTO] || "");
   return EMPREENDIMENTO_MAP[enumId] || null;
+}
+
+function getCidade(deal: any): string {
+  const enumId = String(deal[FIELD_CIDADE] || "");
+  return CIDADE_MAP[enumId] || "Sem cidade";
+}
+
+function getBairro(deal: any): string {
+  const val = deal[FIELD_BAIRRO];
+  if (!val || typeof val !== "string" || val.trim() === "") return "Sem bairro";
+  return val.trim().split(" ").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
 function getDateRange() {
@@ -204,19 +481,20 @@ function countDeals(
 ) {
   let mkt = 0;
   for (const deal of deals) {
-    // Filter to MKTP pipeline only (/deals endpoint returns ALL pipelines)
+    // Filter to SZS pipeline only (/deals endpoint returns ALL pipelines)
     if (deal.pipeline_id !== PIPELINE_ID) continue;
-    if (!isMarketingDeal(deal)) continue;
-    if (deal.lost_reason === "Duplicado/Erro") continue;
+    if (String(deal.lost_reason || "").toLowerCase() === "duplicado/erro") continue;
     mkt++;
+    const canalGroup = getCanalGroup(deal);
     const emp = getEmpreendimento(deal);
+    const bairro = getBairro(deal);
     if (!emp) continue;
     for (const tab of TABS) {
       const dateStr = getDateField(deal, tab);
       if (!dateStr) continue;
       const day = dateStr.substring(0, 10);
       if (day < startDate || day > endDate) continue;
-      const key = `${day}|${emp}`;
+      const key = `${day}|${canalGroup}|${emp}|${bairro}`;
       countsPerTab[tab].set(key, (countsPerTab[tab].get(key) || 0) + 1);
     }
   }
@@ -224,33 +502,32 @@ function countDeals(
 }
 
 // ---- Write counts to DB ----
-async function writeDailyCounts(svcKey: string, countsPerTab: Record<Tab, Map<string, number>>, startDate: string, endDate: string, source: string) {
+async function writeDailyCounts(supabase: any, countsPerTab: Record<Tab, Map<string, number>>, startDate: string, endDate: string, source: string) {
   const result: Record<string, number> = {};
   for (const tab of TABS) {
     const final = countsPerTab[tab];
 
     const rows = Array.from(final.entries()).map(([key, count]) => {
-      const [date, empreendimento] = key.split("|");
-      return { date, tab, empreendimento, count, source, synced_at: new Date().toISOString() };
+      const [date, canal_group, empreendimento, bairro] = key.split("|");
+      return { date, tab, canal_group, empreendimento, bairro, count, source, synced_at: new Date().toISOString() };
     });
 
-    // Delete only rows from THIS source (idempotent)
-    const del = await restDelete(svcKey, "mktp_daily_counts", [
-      ["tab", `eq.${tab}`], ["source", `eq.${source}`], ["date", `gte.${startDate}`], ["date", `lte.${endDate}`],
-    ]);
-    if (del.error) console.error(`  ${tab}: delete error=${del.error}`);
+    // Delete only rows from THIS source (idempotent — each source replaces only itself)
+    await supabase.from("decor_daily_counts").delete()
+      .eq("tab", tab)
+      .eq("source", source)
+      .gte("date", startDate)
+      .lte("date", endDate);
 
-    let totalInserted = 0;
     if (rows.length > 0) {
       for (let i = 0; i < rows.length; i += 500) {
         const batch = rows.slice(i, i + 500);
-        const ins = await restInsert(svcKey, "mktp_daily_counts", batch);
-        if (ins.error) console.error(`  ${tab}: insert error=${ins.error}`);
-        else totalInserted += ins.inserted;
+        const { error } = await supabase.from("decor_daily_counts").insert(batch);
+        if (error) console.error(`Insert error ${tab}:`, error.message);
       }
     }
     console.log(`  ${tab}: ${rows.length} rows (source=${source})`);
-    result[tab] = totalInserted;
+    result[tab] = rows.length;
   }
   return result;
 }
@@ -262,40 +539,41 @@ function countDealsByStage(
 ) {
   const today = new Date().toISOString().substring(0, 10);
   for (const deal of deals) {
-    if (!isMarketingDeal(deal)) continue;
+    const canalGroup = getCanalGroup(deal);
     const emp = getEmpreendimento(deal);
+    const bairro = getBairro(deal);
     if (!emp) continue;
     const stageId = deal.stage_id;
     if (stageId === STAGE_RESERVA) {
-      const key = `${today}|${emp}`;
+      const key = `${today}|${canalGroup}|${emp}|${bairro}`;
       stageCounts.reserva.set(key, (stageCounts.reserva.get(key) || 0) + 1);
     } else if (stageId === STAGE_CONTRATO) {
-      const key = `${today}|${emp}`;
+      const key = `${today}|${canalGroup}|${emp}|${bairro}`;
       stageCounts.contrato.set(key, (stageCounts.contrato.get(key) || 0) + 1);
     }
   }
 }
 
-async function writeStageCounts(svcKey: string, stageCounts: Record<"reserva" | "contrato", Map<string, number>>) {
+async function writeStageCounts(supabase: any, stageCounts: Record<"reserva" | "contrato", Map<string, number>>) {
   const today = new Date().toISOString().substring(0, 10);
   for (const tab of ["reserva", "contrato"] as const) {
     // Delete previous snapshot data for this tab
-    const del = await restDelete(svcKey, "mktp_daily_counts", [["tab", `eq.${tab}`]]);
-    if (del.error) console.error(`  ${tab}: delete error=${del.error}`);
+    const { error: delErr } = await supabase.from("decor_daily_counts").delete().eq("tab", tab);
+    if (delErr) console.error(`Delete error ${tab}:`, delErr.message);
     const rows = Array.from(stageCounts[tab].entries()).map(([key, count]) => {
-      const [date, empreendimento] = key.split("|");
-      return { date, tab, empreendimento, count, synced_at: new Date().toISOString() };
+      const [date, canal_group, empreendimento, bairro] = key.split("|");
+      return { date, tab, canal_group, empreendimento, bairro, count, synced_at: new Date().toISOString() };
     });
     if (rows.length > 0) {
-      const ins = await restInsert(svcKey, "mktp_daily_counts", rows);
-      if (ins.error) console.error(`  ${tab}: insert error=${ins.error}`);
+      const { error } = await supabase.from("decor_daily_counts").insert(rows);
+      if (error) console.error(`Insert error ${tab}:`, error.message);
     }
     console.log(`  ${tab}: ${rows.length} rows`);
   }
 }
 
 // ---- Mode: daily-open (pipeline endpoint, replaces counts) ----
-async function syncDailyOpen(apiToken: string, supabase: any, svcKey: string) {
+async function syncDailyOpen(apiToken: string, supabase: any) {
   const { startDate, endDate } = getDateRange();
   console.log(`syncDailyOpen: fetching pipeline ${PIPELINE_ID} open deals...`);
 
@@ -322,14 +600,14 @@ async function syncDailyOpen(apiToken: string, supabase: any, svcKey: string) {
   const contratoTotal = Array.from(stageCounts.contrato.values()).reduce((a, b) => a + b, 0);
   console.log(`  Open deals: ${total}, reserva=${reservaTotal}, contrato=${contratoTotal}`);
   // Write main counts first, then stage counts (so stage counts aren't overwritten)
-  const mainResult = await writeDailyCounts(svcKey, countsPerTab, startDate, endDate, "open");
-  await writeStageCounts(svcKey, stageCounts);
+  const mainResult = await writeDailyCounts(supabase, countsPerTab, startDate, endDate, "open");
+  await writeStageCounts(supabase, stageCounts);
   return { ...mainResult, reserva: reservaTotal, contrato: contratoTotal };
 }
 
 // ---- Mode: daily-status (uses stage_id filter, merges with existing) ----
 // For lost deals: sorts by add_time DESC and stops when deals are older than cutoff
-async function syncDailyByStatus(apiToken: string, supabase: any, svcKey: string, status: string) {
+async function syncDailyByStatus(apiToken: string, supabase: any, status: string) {
   const { startDate, endDate } = getDateRange();
   // Cutoff: stop scanning when add_time is older than 90 days (generous buffer over 35-day window)
   const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
@@ -382,11 +660,11 @@ async function syncDailyByStatus(apiToken: string, supabase: any, svcKey: string
     if (stoppedEarly) skippedStages++;
   }
   console.log(`  ${status}: ${totalDeals} unique deals (${seenDealIds.size} seen), ${totalMkt} marketing, ${skippedStages} stages stopped early`);
-  return writeDailyCounts(svcKey, countsPerTab, startDate, endDate, status);
+  return writeDailyCounts(supabase, countsPerTab, startDate, endDate, status);
 }
 
 // ---- Mode: alignment ----
-async function syncAlignment(apiToken: string, svcKey: string) {
+async function syncAlignment(apiToken: string, supabase: any) {
   console.log(`syncAlignment: fetching pipeline ${PIPELINE_ID} open deals...`);
   const deals: any[] = [];
   let start = 0;
@@ -400,14 +678,8 @@ async function syncAlignment(apiToken: string, svcKey: string) {
     start += 500;
   }
 
-  const userMap = new Map<number, string>();
-  let uStart = 0;
-  while (true) {
-    const usersRes = await pipedriveGet(apiToken, "/users", { limit: "500", start: String(uStart) });
-    for (const u of usersRes.data || []) userMap.set(Number(u.id), u.name);
-    if (!usersRes.additional_data?.pagination?.more_items_in_collection) break;
-    uStart += 500;
-  }
+  const usersRes = await pipedriveGet(apiToken, "/users");
+  const userMap = new Map(usersRes.data.map((u: any) => [u.id, u.name]));
   const counts = new Map<string, number>();
   const dealRows: Array<{deal_id: number; title: string; empreendimento: string; owner_name: string; synced_at: string}> = [];
   for (const deal of deals) {
@@ -416,7 +688,7 @@ async function syncAlignment(apiToken: string, svcKey: string) {
     // Pipeline endpoint returns user_id as integer (not object)
     const ownerId = typeof deal.user_id === "object" ? deal.user_id?.id : deal.user_id;
     if (!ownerId) continue;
-    const ownerName = userMap.get(Number(ownerId)) || String(ownerId);
+    const ownerName = userMap.get(ownerId) || String(ownerId);
     const key = `${emp}|${ownerName}`;
     counts.set(key, (counts.get(key) || 0) + 1);
     dealRows.push({
@@ -429,7 +701,7 @@ async function syncAlignment(apiToken: string, svcKey: string) {
   }
 
   // Write aggregated counts
-  await restDelete(svcKey, "mktp_alignment", [["empreendimento", "not.is.null"]]);
+  await supabase.from("decor_alignment").delete().neq("empreendimento", "");
   const rows = Array.from(counts.entries()).map(([key, count]) => {
     const [empreendimento, owner_name] = key.split("|");
     return { empreendimento, owner_name, count, synced_at: new Date().toISOString() };
@@ -437,18 +709,18 @@ async function syncAlignment(apiToken: string, svcKey: string) {
   if (rows.length > 0) {
     for (let i = 0; i < rows.length; i += 500) {
       const batch = rows.slice(i, i + 500);
-      const ins = await restInsert(svcKey, "mktp_alignment", batch);
-      if (ins.error) console.error("Alignment insert error:", ins.error);
+      const { error } = await supabase.from("decor_alignment").insert(batch);
+      if (error) console.error("Alignment insert error:", error.message);
     }
   }
 
   // Write individual deal records
-  await restDelete(svcKey, "mktp_alignment_deals", [["empreendimento", "not.is.null"]]);
+  await supabase.from("decor_alignment_deals").delete().neq("empreendimento", "");
   if (dealRows.length > 0) {
     for (let i = 0; i < dealRows.length; i += 500) {
       const batch = dealRows.slice(i, i + 500);
-      const ins = await restInsert(svcKey, "mktp_alignment_deals", batch);
-      if (ins.error) console.error("Alignment deals insert error:", ins.error);
+      const { error } = await supabase.from("decor_alignment_deals").insert(batch);
+      if (error) console.error("Alignment deals insert error:", error.message);
     }
   }
 
@@ -462,7 +734,7 @@ function daysInMonth(year: number, month: number) {
 }
 
 async function syncMetas(supabase: any) {
-  console.log("syncMetas: calculating from nekt_meta26_metas + mktp_daily_counts");
+  console.log("syncMetas: calculating from nekt_meta26_metas + decor_daily_counts");
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
@@ -477,7 +749,7 @@ async function syncMetas(supabase: any) {
     .eq("data", metaDateStr)
     .single();
   if (nektErr || !nektMeta) throw new Error(`nekt_meta26_metas not found for ${metaDateStr}: ${nektErr?.message}`);
-  // MKTP uses same meta columns as SZI (shared Pipedrive instance)
+  // SZS uses same meta columns as SZI (shared Pipedrive instance)
   const wonMetaTotal = (Number(nektMeta.won_szi_meta_pago) || 0) + (Number(nektMeta.won_szi_meta_direto) || 0);
   const wonPerCloser = TOTAL_CLOSERS > 0 ? wonMetaTotal / TOTAL_CLOSERS : 0;
 
@@ -488,7 +760,7 @@ async function syncMetas(supabase: any) {
   const counts90d: Record<Tab, number> = { mql: 0, sql: 0, opp: 0, won: 0 };
   for (const tab of TABS) {
     const { data: dailyRows } = await supabase
-      .from("mktp_daily_counts").select("count").eq("tab", tab).gte("date", startDate).lte("date", endDate);
+      .from("decor_daily_counts").select("count").eq("tab", tab).gte("date", startDate).lte("date", endDate);
     if (dailyRows) counts90d[tab] = dailyRows.reduce((sum: number, r: any) => sum + (r.count || 0), 0);
     console.log(`  90d ${tab}: ${counts90d[tab]}`);
   }
@@ -508,21 +780,66 @@ async function syncMetas(supabase: any) {
       mql: (day / totalDays) * ratioMqlSql * ratioSqlOpp * ratioOppWon * wonMetaSquad,
     };
     for (const tab of TABS) {
-      metaRows.push({ month: monthStart, squad_id: sq.id, tab, meta: metas[tab], synced_at: new Date().toISOString() });
+      metaRows.push({ month: monthStart, squad_id: sq.id, tab, meta: Math.round(metas[tab]), synced_at: new Date().toISOString() });
     }
   }
 
-  await supabase.from("mktp_metas").upsert(metaRows, { onConflict: "month,squad_id,tab" });
-  await supabase.from("mktp_ratios").upsert(
+  await supabase.from("decor_metas").upsert(metaRows, { onConflict: "month,squad_id,tab" });
+  await supabase.from("decor_ratios").upsert(
     { month: monthStart, ratios, counts_90d: counts90d, synced_at: new Date().toISOString() },
     { onConflict: "month" },
   );
+
+  // Save daily snapshot to decor_ratios_daily (global + per-canal_group)
+  const CANAL_ID_MAP: Record<string, number> = {
+    "Marketing": 1,
+    "Ind. Corretor": 2, "Ind. Franquia": 2, "Ind. Outros Parceiros": 2, "Parceiros": 2,
+    "Expansão": 3, "Spots": 4, "Mônica": 5, "Outros": 6,
+  };
+  const canalCounts90d: Record<number, Record<Tab, number>> = {};
+  for (const cId of Object.values(CANAL_ID_MAP)) {
+    canalCounts90d[cId] = { mql: 0, sql: 0, opp: 0, won: 0 };
+  }
+  for (const tab of TABS) {
+    const { data: canalRows } = await supabase
+      .from("decor_daily_counts").select("count, canal_group").eq("tab", tab).gte("date", startDate).lte("date", endDate);
+    if (canalRows) {
+      for (const r of canalRows) {
+        const cId = CANAL_ID_MAP[r.canal_group];
+        if (cId && canalCounts90d[cId]) canalCounts90d[cId][tab] += r.count || 0;
+      }
+    }
+  }
+
+  const today = endDate;
+  const dailyRows = [
+    { date: today, squad_id: 0, ratios, counts_90d: counts90d, synced_at: new Date().toISOString() },
+  ];
+  for (const [canalName, cId] of Object.entries(CANAL_ID_MAP)) {
+    const cc = canalCounts90d[cId];
+    dailyRows.push({
+      date: today,
+      squad_id: cId,
+      ratios: {
+        opp_won: cc.won > 0 ? cc.opp / cc.won : 0,
+        sql_opp: cc.opp > 0 ? cc.sql / cc.opp : 0,
+        mql_sql: cc.sql > 0 ? cc.mql / cc.sql : 0,
+      },
+      counts_90d: cc,
+      synced_at: new Date().toISOString(),
+    });
+  }
+  const { error: dailyErr } = await supabase
+    .from("decor_ratios_daily")
+    .upsert(dailyRows, { onConflict: "date,squad_id" });
+  if (dailyErr) console.error("decor_ratios_daily upsert error:", dailyErr.message);
+  else console.log(`  decor_ratios_daily: ${dailyRows.length} rows for ${today}`);
 
   console.log(`syncMetas: ${metaRows.length} rows, total_won_meta=${wonMetaTotal}`);
   return { squadMetas: metaRows.length, ratios };
 }
 
-// ---- Mode: backfill-monthly-* (Pipedrive → mktp_monthly_counts, 12 months) ----
+// ---- Mode: backfill-monthly-* (Pipedrive → decor_monthly_counts, 12 months) ----
 // Split into 3 separate calls to stay within 150MB memory:
 //   backfill-monthly-clear  → empties table
 //   backfill-monthly-open   → open deals (pipeline endpoint)
@@ -531,14 +848,15 @@ async function syncMetas(supabase: any) {
 // Uses RPC add_monthly_counts for additive upsert (count += new).
 
 async function backfillMonthlyClear(supabase: any) {
-  const { error } = await supabase.from("mktp_monthly_counts").delete().neq("month", "");
+  const { error } = await supabase.from("decor_monthly_counts").delete().neq("month", "");
   if (error) throw new Error(`Clear error: ${error.message}`);
   console.log("backfill-monthly-clear: table emptied");
   return { cleared: true };
 }
 
+// Decor pipeline 44 stages (348-359)
 const STAGE_ORDER: Record<number, number> = {
-  336: 1, 335: 2, 334: 3, 347: 4, 333: 5, 284: 6, 337: 7, 274: 8, 308: 9, 309: 10, 393: 11, 305: 12, 271: 13,
+  348: 1, 349: 2, 350: 3, 351: 4, 352: 5, 353: 6, 354: 7, 355: 8, 356: 9, 357: 10, 358: 11, 359: 12,
 };
 const MQL_MIN_ORDER = 2;  // Contatados
 const SQL_MIN_ORDER = 4;  // Qualificado
@@ -571,25 +889,28 @@ async function getMaxStageReached(apiToken: string, dealId: number, currentOrder
 
 // Count deal into monthly map based on max stage reached
 function countDealByStage(deal: any, maxOrder: number, monthly: Map<string, number>, startDate: string, endDate: string) {
+  if (String(deal.lost_reason || "").toLowerCase() === "duplicado/erro") return;
   const addTime = deal.add_time;
   if (!addTime) return;
   const day = addTime.substring(0, 10);
   if (day < startDate || day > endDate) return;
   const emp = getEmpreendimento(deal);
+  const bairro = getBairro(deal);
   if (!emp) return;
+  const canalGroup = getCanalGroup(deal);
   const month = day.substring(0, 7);
 
   if (maxOrder >= MQL_MIN_ORDER) {
-    monthly.set(`${month}|${emp}|mql`, (monthly.get(`${month}|${emp}|mql`) || 0) + 1);
+    monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|mql`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|mql`) || 0) + 1);
   }
   if (maxOrder >= SQL_MIN_ORDER) {
-    monthly.set(`${month}|${emp}|sql`, (monthly.get(`${month}|${emp}|sql`) || 0) + 1);
+    monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|sql`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|sql`) || 0) + 1);
   }
   if (maxOrder >= OPP_MIN_ORDER) {
-    monthly.set(`${month}|${emp}|opp`, (monthly.get(`${month}|${emp}|opp`) || 0) + 1);
+    monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|opp`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|opp`) || 0) + 1);
   }
   if (deal.status === "won") {
-    monthly.set(`${month}|${emp}|won`, (monthly.get(`${month}|${emp}|won`) || 0) + 1);
+    monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|won`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|won`) || 0) + 1);
   }
 }
 
@@ -611,8 +932,7 @@ async function backfillOpenWon(apiToken: string, supabase: any) {
     if (!res.data || res.data.length === 0) break;
     for (const deal of res.data) {
       if (deal.pipeline_id !== PIPELINE_ID) continue;
-      if (!isMarketingDeal(deal)) continue;
-      if (!getEmpreendimento(deal)) continue;
+
       totalOpen++;
       const currentOrder = STAGE_ORDER[deal.stage_id] || 0;
       countDealByStage(deal, currentOrder, monthly, startDate, endDate);
@@ -634,10 +954,9 @@ async function backfillOpenWon(apiToken: string, supabase: any) {
         if (seenWon.has(deal.id)) continue;
         seenWon.add(deal.id);
         if (deal.pipeline_id !== PIPELINE_ID) continue;
-        if (!isMarketingDeal(deal)) continue;
-        if (!getEmpreendimento(deal)) continue;
+
         totalWon++;
-        countDealByStage(deal, 13, monthly, startDate, endDate); // Won = passed all stages (MKTP has 13 stages)
+        countDealByStage(deal, 12, monthly, startDate, endDate); // Won = passed all stages (SZS has 12 stages)
       }
       if (!res.additional_data?.pagination?.more_items_in_collection) break;
       ws += 500;
@@ -646,8 +965,8 @@ async function backfillOpenWon(apiToken: string, supabase: any) {
 
   // Upsert (additive)
   const rows = Array.from(monthly.entries()).map(([key, count]) => {
-    const [month, empreendimento, tab] = key.split("|");
-    return { month, empreendimento, tab, count };
+    const [month, canal_group, empreendimento, bairro, tab] = key.split("|");
+    return { month, canal_group, empreendimento, bairro, tab, count };
   });
   if (rows.length > 0) {
     for (let i = 0; i < rows.length; i += 200) {
@@ -693,8 +1012,7 @@ async function backfillLostWithFlow(apiToken: string, supabase: any, startFrom: 
       seenDealIds.add(deal.id);
       dealsScanned++;
       if (deal.pipeline_id !== PIPELINE_ID) continue;
-      if (!isMarketingDeal(deal)) continue;
-      if (!getEmpreendimento(deal)) continue;
+
       const addTime = deal.add_time;
       if (!addTime) continue;
       const day = addTime.substring(0, 10);
@@ -725,8 +1043,8 @@ async function backfillLostWithFlow(apiToken: string, supabase: any, startFrom: 
 
   // Upsert (additive)
   const rows = Array.from(monthly.entries()).map(([key, count]) => {
-    const [month, empreendimento, tab] = key.split("|");
-    return { month, empreendimento, tab, count };
+    const [month, canal_group, empreendimento, bairro, tab] = key.split("|");
+    return { month, canal_group, empreendimento, bairro, tab, count };
   });
   if (rows.length > 0) {
     for (let i = 0; i < rows.length; i += 200) {
@@ -757,8 +1075,10 @@ async function syncMonthlyRollup(apiToken: string, supabase: any) {
 
   function countDeal(deal: any) {
     if (deal.pipeline_id !== PIPELINE_ID) return;
-    if (!isMarketingDeal(deal)) return;
+    if (String(deal.lost_reason || "").toLowerCase() === "duplicado/erro") return;
+    const canalGroup = getCanalGroup(deal);
     const emp = getEmpreendimento(deal);
+    const bairro = getBairro(deal);
     if (!emp) return;
     const addTime = deal.add_time;
     if (!addTime) return;
@@ -769,15 +1089,15 @@ async function syncMonthlyRollup(apiToken: string, supabase: any) {
     const hasQualDate = !!deal[FIELD_QUALIFICACAO];
     const hasReunDate = !!deal[FIELD_REUNIAO];
 
-    monthly.set(`${month}|${emp}|mql`, (monthly.get(`${month}|${emp}|mql`) || 0) + 1);
+    monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|mql`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|mql`) || 0) + 1);
     if (stageOrder >= SQL_MIN_ORDER || hasQualDate) {
-      monthly.set(`${month}|${emp}|sql`, (monthly.get(`${month}|${emp}|sql`) || 0) + 1);
+      monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|sql`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|sql`) || 0) + 1);
     }
     if (stageOrder >= OPP_MIN_ORDER || hasReunDate) {
-      monthly.set(`${month}|${emp}|opp`, (monthly.get(`${month}|${emp}|opp`) || 0) + 1);
+      monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|opp`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|opp`) || 0) + 1);
     }
     if (deal.status === "won") {
-      monthly.set(`${month}|${emp}|won`, (monthly.get(`${month}|${emp}|won`) || 0) + 1);
+      monthly.set(`${month}|${canalGroup}|${emp}|${bairro}|won`, (monthly.get(`${month}|${canalGroup}|${emp}|${bairro}|won`) || 0) + 1);
     }
   }
 
@@ -826,13 +1146,13 @@ async function syncMonthlyRollup(apiToken: string, supabase: any) {
 
   // Upsert (replace) for current + prev month
   const rows = Array.from(monthly.entries()).map(([key, count]) => {
-    const [month, empreendimento, tab] = key.split("|");
-    return { month, empreendimento, tab, count, synced_at: new Date().toISOString() };
+    const [month, canal_group, empreendimento, bairro, tab] = key.split("|");
+    return { month, canal_group, empreendimento, bairro, tab, count, synced_at: new Date().toISOString() };
   });
 
   if (rows.length > 0) {
     const { error: upsertErr } = await supabase
-      .from("mktp_monthly_counts")
+      .from("decor_monthly_counts")
       .upsert(rows, { onConflict: "month,empreendimento,tab" });
     if (upsertErr) console.error(`monthly-rollup upsert error:`, upsertErr.message);
   }
@@ -843,18 +1163,23 @@ async function syncMonthlyRollup(apiToken: string, supabase: any) {
 
 // ---- Handler ----
 Deno.serve(async (req) => {
+  // DB_SCHEMA injected
+  try {
+    const __body = await req.clone().json().catch(() => ({}));
+    DB_SCHEMA = __body?.__schema || "public";
+  } catch { DB_SCHEMA = "public"; }
+
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
   const startTime = Date.now();
   try {
-    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-    const svcKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { db: { schema: DB_SCHEMA } });
 
     // Auth handled by Supabase gateway (--no-verify-jwt not set)
 
     // Get Pipedrive token from Vault
-    const { data: tokenData } = await supabase.rpc("vault_read_secret", { secret_name: "PIPEDRIVE_API_TOKEN" });
+    const { data: tokenData } = await supabase.schema("public").rpc("vault_read_secret", { secret_name: "PIPEDRIVE_API_TOKEN" });
     const apiToken = tokenData?.trim();
     if (!apiToken) throw new Error("PIPEDRIVE_API_TOKEN not found in vault");
 
@@ -865,24 +1190,24 @@ Deno.serve(async (req) => {
       body = await req.json();
       if (body?.mode) mode = body.mode;
     } catch {}
-    console.log(`sync-mktp-dashboard mode=${mode}`);
+    console.log(`sync-szs-dashboard mode=${mode}`);
 
     let result;
     switch (mode) {
       case "daily-open":
         // Open deals from pipeline endpoint (replaces counts)
-        result = await syncDailyOpen(apiToken, supabase, svcKey);
+        result = await syncDailyOpen(apiToken, supabase);
         break;
       case "daily-won":
         // Won deals via stage_id filter (merges with existing)
-        result = await syncDailyByStatus(apiToken, supabase, svcKey, "won");
+        result = await syncDailyByStatus(apiToken, supabase, "won");
         break;
       case "daily-lost":
         // Lost deals via stage_id filter (merges with existing)
-        result = await syncDailyByStatus(apiToken, supabase, svcKey, "lost");
+        result = await syncDailyByStatus(apiToken, supabase, "lost");
         break;
       case "alignment":
-        result = { rows: await syncAlignment(apiToken, svcKey) };
+        result = { rows: await syncAlignment(apiToken, supabase) };
         break;
       case "metas":
         result = await syncMetas(supabase);
@@ -917,7 +1242,7 @@ Deno.serve(async (req) => {
           for (const d of res.data) {
             if (d.pipeline_id !== PIPELINE_ID) continue;
             sampleOpen++;
-            if (isMarketingDeal(d) && getEmpreendimento(d)) {
+            if (getCidade(d)) {
               mktOpen++;
               const sid = String(d.stage_id);
               stageDistOpen[sid] = (stageDistOpen[sid] || 0) + 1;
@@ -939,7 +1264,7 @@ Deno.serve(async (req) => {
               seenW.add(d.id);
               if (d.pipeline_id !== PIPELINE_ID) continue;
               sampleWon++;
-              if (isMarketingDeal(d) && getEmpreendimento(d)) {
+              if (getCidade(d)) {
                 mktWon++;
                 const sid = String(d.stage_id);
                 stageDistWon[sid] = (stageDistWon[sid] || 0) + 1;
@@ -962,7 +1287,7 @@ Deno.serve(async (req) => {
               seenL.add(d.id);
               if (d.pipeline_id !== PIPELINE_ID) continue;
               sampleLost++;
-              if (isMarketingDeal(d) && getEmpreendimento(d)) {
+              if (getCidade(d)) {
                 mktLost++;
                 const sid = String(d.stage_id);
                 stageDistLost[sid] = (stageDistLost[sid] || 0) + 1;
@@ -991,6 +1316,46 @@ Deno.serve(async (req) => {
         result = { daily, won, alignment, metas };
         break;
       }
+      case "snapshot": {
+        // Daily snapshot of open deals by canal_group and stage
+        const today = new Date().toISOString().substring(0, 10);
+        const snapCounts: Record<string, { total: number; mql: number; sql: number; opp: number; won: number; ag_dados: number; contrato: number }> = {};
+        let snapStart = 0;
+        let snapTotal = 0;
+        while (true) {
+          const res = await pipedriveGet(apiToken, `/pipelines/${PIPELINE_ID}/deals`, { limit: "500", start: String(snapStart) });
+          if (!res.data || res.data.length === 0) break;
+          for (const deal of res.data) {
+            if (deal.pipeline_id !== PIPELINE_ID) continue;
+            if (String(deal.lost_reason || "").toLowerCase() === "duplicado/erro") continue;
+            const cg = getCanalGroup(deal);
+            if (!snapCounts[cg]) snapCounts[cg] = { total: 0, mql: 0, sql: 0, opp: 0, won: 0, ag_dados: 0, contrato: 0 };
+            const c = snapCounts[cg];
+            const so = STAGE_ORDER[deal.stage_id] || 0;
+            c.total++;
+            c.mql++;
+            if (so >= SQL_MIN_ORDER) c.sql++;
+            if (so >= OPP_MIN_ORDER) c.opp++;
+            if (so === 11) c.ag_dados++;
+            if (so === 12) c.contrato++;
+            snapTotal++;
+          }
+          if (!res.additional_data?.pagination?.more_items_in_collection) break;
+          snapStart += 500;
+        }
+        // Upsert rows
+        const snapRows = Object.entries(snapCounts).map(([canal_group, c]) => ({
+          date: today, canal_group, total_open: c.total, mql: c.mql, sql_count: c.sql,
+          opp: c.opp, won: c.won, ag_dados: c.ag_dados, contrato: c.contrato,
+          synced_at: new Date().toISOString(),
+        }));
+        if (snapRows.length > 0) {
+          const { error: snapErr } = await supabase.from("decor_open_snapshots").upsert(snapRows, { onConflict: "date,canal_group" });
+          if (snapErr) console.error("Snapshot upsert error:", snapErr.message);
+        }
+        result = { date: today, groups: snapRows.length, total: snapTotal };
+        break;
+      }
       default:
         return new Response(JSON.stringify({ success: false, error: `Unknown mode: ${mode}` }), {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -998,13 +1363,13 @@ Deno.serve(async (req) => {
     }
 
     const elapsed = Date.now() - startTime;
-    console.log(`sync-mktp-dashboard completed in ${elapsed}ms`);
+    console.log(`sync-szs-dashboard completed in ${elapsed}ms`);
     return new Response(JSON.stringify({ success: true, mode, result, elapsed_ms: elapsed }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Unknown error";
-    console.error("sync-mktp-dashboard fatal:", msg);
+    console.error("sync-szs-dashboard fatal:", msg);
     return new Response(JSON.stringify({ success: false, error: msg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

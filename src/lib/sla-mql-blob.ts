@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob"
+import { putBlob, fetchBlobJson } from "@/lib/blob"
 
 export type SlaRow = {
   id: number
@@ -76,56 +76,29 @@ const SEED: SlaData = {
   },
 }
 
-// ─── Helpers Blob ─────────────────────────────────────────────────────────────
+// ─── API (Supabase Storage via @/lib/blob) ───────────────────────────────────
 
 const DATA_KEY = "sla-mql/data.json"
 const LOG_KEY  = "sla-mql/log.json"
-const BLOB_URL   = process.env.BLOB_URL               || ""
-const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN   || ""
-
-async function fetchBlob<T>(path: string): Promise<T | null> {
-  if (!BLOB_URL) return null
-  try {
-    const res = await fetch(`${BLOB_URL}/${path}`, {
-      headers: BLOB_TOKEN ? { Authorization: `Bearer ${BLOB_TOKEN}` } : {},
-      cache: "no-store",
-    })
-    if (!res.ok) return null
-    return res.json() as Promise<T>
-  } catch {
-    return null
-  }
-}
-
-async function writeBlob(path: string, data: unknown): Promise<void> {
-  await put(path, JSON.stringify(data), {
-    access: "private",
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    token: BLOB_TOKEN,
-  })
-}
-
-// ─── API ──────────────────────────────────────────────────────────────────────
 
 export async function readData(): Promise<SlaData> {
-  const d = await fetchBlob<SlaData>(DATA_KEY)
+  const d = await fetchBlobJson<SlaData>(DATA_KEY)
   if (d?.rows?.length) return d
-  await writeBlob(DATA_KEY, SEED)
+  await putBlob(DATA_KEY, SEED)
   return SEED
 }
 
 export async function writeData(data: SlaData): Promise<void> {
-  await writeBlob(DATA_KEY, data)
+  await putBlob(DATA_KEY, data)
 }
 
 export async function readLog(): Promise<SlaLogEntry[]> {
-  const d = await fetchBlob<{ entries: SlaLogEntry[] }>(LOG_KEY)
+  const d = await fetchBlobJson<{ entries: SlaLogEntry[] }>(LOG_KEY)
   return d?.entries ?? []
 }
 
 export async function appendLog(entries: SlaLogEntry[]): Promise<void> {
   if (entries.length === 0) return
   const existing = await readLog()
-  await writeBlob(LOG_KEY, { entries: [...entries, ...existing].slice(0, 500) })
+  await putBlob(LOG_KEY, { entries: [...entries, ...existing].slice(0, 500) })
 }

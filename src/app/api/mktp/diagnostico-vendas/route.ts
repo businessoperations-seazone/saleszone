@@ -9,21 +9,21 @@ const V_COLS = mc.closers;
 
 export const dynamic = "force-dynamic";
 
+// MKTP pipeline (37) — 13 stages
 const STAGE_NAMES: Record<number, string> = {
-  1: "FUP Parceiro",
-  2: "Lead in",
-  3: "Contatados",
-  4: "Qualificação",
-  5: "Qualificado",
-  6: "Aguardando data",
-  7: "Agendado",
-  8: "No Show/Reagendamento",
-  9: "Reunião/OPP",
-  10: "FUP",
-  11: "Negociação",
-  12: "Fila de espera",
-  13: "Reservas",
-  14: "Contrato",
+  1: "Lead In",
+  2: "Contatados",
+  3: "Qualificação",
+  4: "Qualificado",
+  5: "Aguardando data",
+  6: "Reunião Agendada",
+  7: "No show",
+  8: "Reunião Realizada",
+  9: "FUP",
+  10: "Negociação",
+  11: "Proposta Aprovada",
+  12: "Reserva",
+  13: "Contrato",
 };
 
 function getSeveridade(hours: number): VendasSeveridade {

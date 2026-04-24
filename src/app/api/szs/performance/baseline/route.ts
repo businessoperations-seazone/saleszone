@@ -110,7 +110,7 @@ export async function GET() {
         const offset = (dt.getFullYear() - zeroYear) * 12 + (dt.getMonth() - zeroMonth);
         if (!monthMap.has(offset)) monthMap.set(offset, { opp: 0, won: 0 });
         const m = monthMap.get(offset)!;
-        if (d.max_stage_order >= 9) m.opp++;
+        if (d.max_stage_order >= 8) m.opp++; // SZS OPP = Reunião Realizada (order 8)
         if (d.status === "won") m.won++;
       }
 

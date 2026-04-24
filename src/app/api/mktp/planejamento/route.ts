@@ -89,7 +89,7 @@ export async function GET(request: Request) {
     ]);
 
     // Compute counts by month/canal from deals (grouped by canal instead of empreendimento)
-    // Stage thresholds: MQL>=2, SQL>=5, OPP>=9
+    // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8)
     const rpcLikeData: Array<{ month: string; empreendimento: string; mql: number; sql: number; opp: number; won: number }> = [];
     const canalMonthCounts = new Map<string, { mql: number; sql: number; opp: number; won: number }>();
     for (const d of dealsData) {
@@ -102,8 +102,8 @@ export async function GET(request: Request) {
       const c = canalMonthCounts.get(key)!;
       const mso = d.max_stage_order || 0;
       if (mso >= 2) c.mql++;
-      if (mso >= 5) c.sql++;
-      if (mso >= 9) c.opp++;
+      if (mso >= 4) c.sql++;
+      if (mso >= 8) c.opp++;
       if (d.status === "won") c.won++;
     }
     for (const [key, c] of canalMonthCounts) {

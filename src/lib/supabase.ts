@@ -11,7 +11,9 @@ function getClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) throw new Error("NEXT_PUBLIC_SUPABASE_URL/ANON_KEY missing at runtime");
-  _client = createClient(url, key);
+  // DB_SCHEMA: "public" (staging default) ou "prod" — cast pois types do supabase-js esperam literal
+  const schema = (process.env.NEXT_PUBLIC_DB_SCHEMA || "public") as "public";
+  _client = createClient(url, key, { db: { schema } });
   return _client;
 }
 

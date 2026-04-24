@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 
 /* ── Channel definitions ──────────────────────────────────── */
 const CHANNEL_ORDER = ["Funil Completo", "Vendas Diretas", "Parcerias"] as const;
@@ -84,10 +84,16 @@ interface ResultadosMKTPData {
 
 export const dynamic = "force-dynamic";
 
-/* ── Extract date from timestamp (no timezone shift — Pipedrive dates are already local) ── */
+/* ── Extract BRT date from UTC timestamp.
+   Pipedrive retorna times em UTC. Deal ganho em "2026-04-01 00:45:41 UTC" é
+   2026-03-31 21:45 BRT (UTC-3). substring(0,10) direto contava esse deal em
+   abril, divergindo do Pipedrive UI que exibe em BRT. ── */
 function toDate(ts: string | null | undefined): string | null {
   if (!ts) return null;
-  return ts.substring(0, 10);
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts.substring(0, 10);
+  const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000);
+  return brt.toISOString().substring(0, 10);
 }
 
 /* ── Tab → date column in mktp_deals ─────────────────────── */
@@ -152,7 +158,7 @@ export async function GET() {
     for (const ch of CHANNEL_ORDER) channelCounts[ch] = {};
 
     for (const deal of deals) {
-      if (deal.lost_reason === "Duplicado/Erro") continue;
+      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
       const group = getCanalGroup(String(deal.canal || ""));
       for (const tab of TABS) {
         const dateCol = TAB_DATE_COL[tab];
@@ -174,9 +180,13 @@ export async function GET() {
       prevWon["Funil Completo"] = (prevWon["Funil Completo"] || 0) + 1;
     }
 
-    /* ── 3b. Reserva/Contrato acumulado no mês (coorte de deals fechados) ── */
-    // Deals fechados no mês (won ou lost) que passaram por Reserva (max_stage_order >= 12)
-    // ou Contrato (max_stage_order >= 13). Exclui Duplicado/Erro em JS (neq exclui NULLs).
+    /* ── 3b. Reserva/Contrato acumulado do mês (coorte via max_stage_order).
+       Deals que passaram por Reserva (mso>=12) ou Contrato (mso>=13) e estão
+       abertos ou fecharam no mês, excluindo "Duplicado/Erro". Colunas
+       reserva_entered_at/contrato_entered_at NÃO existem em mktp_deals — este
+       bloco usa max_stage_order que é populado pelo sync. Usado apenas para
+       "Funil Completo" (canais VD/Parcerias continuam snapshot). ── */
+    const nextMonthStart = `${new Date(year, month + 1, 1).toISOString().substring(0, 10)}`;
     const RESERVA_MIN_ORDER = 12;
     const CONTRATO_MIN_ORDER = 13;
 
@@ -185,12 +195,10 @@ export async function GET() {
     for (const ch of CHANNEL_ORDER) { funnelReserva[ch] = 0; funnelContrato[ch] = 0; }
 
     for (const deal of deals) {
-      if (deal.lost_reason === "Duplicado/Erro") continue;
-      // Deal must have closed in current month (won or lost)
+      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
       const closeDate = deal.status === "won" ? toDate(deal.won_time) : toDate(deal.lost_time);
       const isOpen = deal.status === "open";
-      // Include open deals too (they're currently in the funnel)
-      if (!isOpen && (!closeDate || closeDate < startDate)) continue;
+      if (!isOpen && (!closeDate || closeDate < startDate || closeDate >= nextMonthStart)) continue;
 
       const mso = deal.max_stage_order || 0;
       const group = getCanalGroup(String(deal.canal || ""));
@@ -205,58 +213,50 @@ export async function GET() {
       }
     }
 
-    /* ── 4. Meta Ads spend (max por ad_id, soma = gasto real do mês) ── */
-    const metaRows = await paginate((o, ps) =>
-      admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
-    );
-
-    /* ── 4a. Orçamento do mês de mktp_orcamento ── */
-    const { data: orcData } = await admin
-      .from("mktp_orcamento")
-      .select("orcamento_total")
-      .eq("mes", monthKey)
-      .maybeSingle();
-    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
-
-    // Fallback 1: soma dos budgets aprovados por empreendimento
-    if (!orcamentoMeta) {
-      const { data: approvedRows } = await admin
-        .from("mktp_orcamento_approved")
-        .select("budget_recomendado")
-        .eq("mes", monthKey);
-      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
-    }
-    // Fallback 2: mês mais recente disponível em mktp_orcamento
-    if (!orcamentoMeta) {
-      const { data: prevOrc } = await admin
+    /* ── 4. Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ── */
+    // Meta: nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable.ads_marketplace
+    // Real: SUM(spend) de nekt_silver.ads_unificado WHERE vertical='Marketplace'
+    let orcamentoMeta = 0;
+    let totalSpend = 0;
+    try {
+      const budget = await getNektBudget(
+        "Marketplace",
+        "ads_marketplace",
+        startDate,
+        nextMonthStart,
+      );
+      orcamentoMeta = Math.round(budget.orcamento);
+      totalSpend = budget.spend;
+      console.log(`[mktp/resultados] Nekt budget: meta=${orcamentoMeta} spend=${Math.round(totalSpend)}`);
+    } catch (e) {
+      console.warn("[mktp/resultados] Nekt budget query failed, fallback para mktp_orcamento + mktp_meta_ads:", e);
+      const { data: orcData } = await admin
         .from("mktp_orcamento")
         .select("orcamento_total")
-        .lt("mes", monthKey)
-        .order("mes", { ascending: false })
-        .limit(1)
+        .eq("mes", monthKey)
         .maybeSingle();
-      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+      orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+      const metaRows = await paginate((o, ps) =>
+        admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
+      );
+      const spendByAd = new Map<string, number>();
+      for (const r of metaRows) {
+        const adId = r.ad_id as string;
+        const spend = r.spend_month || 0;
+        spendByAd.set(adId, Math.max(spendByAd.get(adId) || 0, spend));
+      }
+      for (const v of spendByAd.values()) totalSpend += v;
     }
 
     /* ── 4b. Metas do mês de mktp_metas (fallback para hardcoded se vazio) ── */
     const { data: mktpMetasRows } = await admin
       .from("mktp_metas").select("tab, meta").eq("month", `${monthKey}-01`);
-    // Aggregate total metas by tab (mql, sql, opp, won, reserva, contrato)
     const totalMetasByTab: Record<string, number> = {};
     for (const r of mktpMetasRows || []) {
       totalMetasByTab[r.tab] = (totalMetasByTab[r.tab] || 0) + (Number(r.meta) || 0);
     }
-    // If mktp_metas has data, use it to build metas per channel
     const totalWonMeta = totalMetasByTab.won || 0;
     const hasMetasData = Object.keys(totalMetasByTab).length > 0;
-    const spendByAd = new Map<string, number>();
-    for (const r of metaRows) {
-      const adId = r.ad_id as string;
-      const spend = r.spend_month || 0;
-      spendByAd.set(adId, Math.max(spendByAd.get(adId) || 0, spend));
-    }
-    let totalSpend = 0;
-    for (const v of spendByAd.values()) totalSpend += v;
 
     /* ── 5. Snapshots from pipedrive_daily_snapshot (pipeline 37) ── */
     const today = now.toISOString().substring(0, 10);
@@ -292,10 +292,10 @@ export async function GET() {
     // Reserva/Contrato do Funil Completo: Nekt real-time (evita stale do daily_snapshot)
     try {
       const nektMktp = await queryNekt(`
-        SELECT CAST(etapa AS INTEGER) as stage_id, COUNT(*) as total
+        SELECT CAST(stage AS INTEGER) as stage_id, COUNT(*) as total
         FROM nekt_silver.pipedrive_deals_readable
-        WHERE status = 'open' AND pipeline_id = 37 AND CAST(etapa AS INTEGER) IN (305, 271)
-        GROUP BY CAST(etapa AS INTEGER)
+        WHERE status = 'open' AND pipeline_id = 37 AND CAST(stage AS INTEGER) IN (305, 271)
+        GROUP BY CAST(stage AS INTEGER)
       `);
       for (const r of nektMktp.rows) {
         const sid = parseInt(String(r.stage_id || "0"));
@@ -364,9 +364,9 @@ export async function GET() {
         .range(o, o + ps - 1)
     );
 
-    // Stage thresholds: MQL>=1, SQL>=5, OPP>=9, Reserva>=12, Contrato>=13
+    // MKTP pipeline (37): MQL=Contatados (2), SQL=Qualificado (4), OPP=Reunião Realizada (8), Reserva (12), Contrato (13)
     const STAGES = ["mql", "sql", "opp", "reserva", "contrato"] as const;
-    const STAGE_MIN: Record<string, number> = { mql: 1, sql: 5, opp: 9, reserva: 12, contrato: 13 };
+    const STAGE_MIN: Record<string, number> = { mql: 2, sql: 4, opp: 8, reserva: 12, contrato: 13 };
 
     // Build date array for 90d window
     const allHistDates: string[] = [];
@@ -388,7 +388,7 @@ export async function GET() {
     }
 
     for (const d of histDeals) {
-      if (d.lost_reason === "Duplicado/Erro") continue;
+      if (d.lost_reason && String(d.lost_reason).toLowerCase() === "duplicado/erro") continue;
       const addDay = toDate(d.add_time) || "";
       const closeDay = d.status === "won" ? toDate(d.won_time) : d.status === "lost" ? toDate(d.lost_time) : null;
       const mso = d.max_stage_order || 0;
@@ -457,10 +457,19 @@ export async function GET() {
       const oppTotal = totalMetasByTab.opp || legacyMetas["Funil Completo"]?.opp || 128;
       const wonFromMeta = totalMetasByTab.won || legacyMetas["Funil Completo"]?.won || 15;
 
+      // Math.round em tudo: mktp_metas pode vir com valores decimais (forecast
+      // por squad_id), mas metas exibidas devem ser inteiras como VD/Parcerias.
       metas["Funil Completo"] = {
-        mql: mqlTotal, sql: sqlTotal, opp: oppTotal, won: wonFromMeta,
-        reserva: totalMetasByTab.reserva || legacyMetas["Funil Completo"]?.reserva,
-        contrato: totalMetasByTab.contrato || legacyMetas["Funil Completo"]?.contrato,
+        mql: Math.round(mqlTotal),
+        sql: Math.round(sqlTotal),
+        opp: Math.round(oppTotal),
+        won: Math.round(wonFromMeta),
+        reserva: totalMetasByTab.reserva != null
+          ? Math.round(totalMetasByTab.reserva)
+          : legacyMetas["Funil Completo"]?.reserva,
+        contrato: totalMetasByTab.contrato != null
+          ? Math.round(totalMetasByTab.contrato)
+          : legacyMetas["Funil Completo"]?.contrato,
       };
       metas["Vendas Diretas"] = {
         mql: Math.round(mqlTotal * wonRatioVD), sql: Math.round(sqlTotal * wonRatioVD),
@@ -508,6 +517,8 @@ export async function GET() {
         metrics,
         lastMonthWon: prevWon[name] || 0,
         snapshots: {
+          // Funil Completo: acumulado do mês (passou por Reserva/Contrato).
+          // VD/Parcerias: snapshot de abertos no stage (305/271).
           aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
           emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
         },
