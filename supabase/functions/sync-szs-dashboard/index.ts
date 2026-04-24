@@ -560,7 +560,7 @@ async function backfillOpenWon(nektApiKey: string, supabase: any) {
 
   const monthly = new Map<string, number>();
 
-  // Open deals — etapa is reliable for active deals
+  // Open deals — stage is reliable for active deals
   const openSql = `
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
@@ -627,7 +627,7 @@ async function backfillLostWithFlow(nektApiKey: string, supabase: any, _startFro
 
   for (const deal of deals) {
     mktDeals++;
-    // For lost deals, use current etapa as max stage (Nekt has the stage where deal was lost)
+    // For lost deals, use current stage as max stage (Nekt has the stage where deal was lost)
     const currentOrder = STAGE_ORDER[parseInt(deal.stage || "0")] || 0;
     countDealByStage(deal, currentOrder, monthly, startDate, endDate);
   }
