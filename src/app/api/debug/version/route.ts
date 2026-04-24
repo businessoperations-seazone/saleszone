@@ -5,7 +5,7 @@ import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 
 export const dynamic = "force-dynamic";
 
-function toDate(ts) {
+function toDate(ts: string | null | undefined): string | null {
   if (!ts) return null;
   const d = new Date(ts);
   if (isNaN(d.getTime())) return ts.substring(0, 10);
@@ -14,7 +14,8 @@ function toDate(ts) {
 }
 
 export async function GET() {
-  const diag = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const diag: Record<string, any> = {
     commit_sha: process.env.VERCEL_GIT_COMMIT_SHA
       || process.env.COMMIT_SHA
       || process.env.GIT_COMMIT
