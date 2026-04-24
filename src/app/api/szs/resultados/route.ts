@@ -306,18 +306,20 @@ export async function GET(request: NextRequest) {
           const canalGroup = NEKT_CANAL_MAP[String(row.canal || "")] || "Outros";
           const isWon = String(row.status) === "won";
 
-          // SQL fallback: se data_de_qualificacao faltar, usa data_da_reuniao
-          // (se chegou em reunião, passou por SQL — Nekt pode não ter a data de qualificação)
-          const sqlDate = row.data_de_qualificacao || row.data_da_reuniao;
+          // SQL: qualificação NESTE mês OU reunião NESTE mês.
+          // Fallback só quando qualif é null não bastava — Nekt pode ter qualificacao de
+          // mês anterior e reunião deste mês. Se o deal teve reunião no mês, passou por
+          // SQL no mês por definição.
+          const sqlCounted = inMonth(row.data_de_qualificacao) || inMonth(row.data_da_reuniao);
 
           if (inMonth(row.negocio_criado_em)) nektCC["Geral"].mql++;
-          if (inMonth(sqlDate)) nektCC["Geral"].sql++;
+          if (sqlCounted) nektCC["Geral"].sql++;
           if (inMonth(row.data_da_reuniao)) nektCC["Geral"].opp++;
           if (inMonth(row.ganho_em) && isWon) nektCC["Geral"].won++;
 
           for (const ch of getChannelTabs(canalGroup).filter(t => t !== "Geral")) {
             if (inMonth(row.negocio_criado_em)) nektCC[ch].mql++;
-            if (inMonth(sqlDate)) nektCC[ch].sql++;
+            if (sqlCounted) nektCC[ch].sql++;
             if (inMonth(row.data_da_reuniao)) nektCC[ch].opp++;
             if (inMonth(row.ganho_em) && isWon) nektCC[ch].won++;
           }
