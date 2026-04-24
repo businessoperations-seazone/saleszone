@@ -142,14 +142,14 @@ function nektDealToRow(deal: Record<string, string | null>, maxStageOrder: numbe
   const stageOrder = STAGE_ORDER[stageId] || 0;
   return {
     deal_id: parseInt(deal.id || "0"),
-    title: deal.titulo || `Deal #${deal.id}`,
+    title: deal.title || `Deal #${deal.id}`,
     stage_id: stageId,
     status: deal.status || "open",
     user_id: parseInt(deal.owner_id || "0"),
     owner_name: deal.owner_name || null,
-    add_time: deal.negocio_criado_em || null,
-    won_time: deal.ganho_em || null,
-    lost_time: deal.data_de_perda || null,
+    add_time: deal.deal_created || null,
+    won_time: deal.won_time || null,
+    lost_time: deal.lost_time || null,
     update_time: deal.atualizado_em || null,
     canal: deal.canal || null,
     empreendimento_id: null,
@@ -174,12 +174,12 @@ function nektDealToRow(deal: Record<string, string | null>, maxStageOrder: numbe
 function buildDealsSQL(status: string, cutoffDate?: string): string {
   let where = `WHERE d.pipeline_id = 28 AND d.status = '${status}'`;
   if (cutoffDate) {
-    where += ` AND d.negocio_criado_em >= TIMESTAMP '${cutoffDate}'`;
+    where += ` AND d.deal_created >= TIMESTAMP '${cutoffDate}'`;
   }
   // Use ROW_NUMBER to pick latest SCD2 record per user (avoids row multiplication)
   return `
-SELECT d.id, d.titulo, d.etapa, d.status, d.owner_id, u.name as owner_name,
-       d.negocio_criado_em, d.ganho_em, d.data_de_perda, d.atualizado_em,
+SELECT d.id, d.title, d.etapa, d.status, d.owner_id, u.name as owner_name,
+       d.deal_created, d.won_time, d.lost_time, d.atualizado_em,
        d.canal, d.empreendimento, d.data_de_qualificacao, d.data_da_reuniao,
        d.motivo_da_perda, d.rd_source, d.data_da_ultima_atividade, d.proxima_atividade_em,
        d.ultima_alteracao_de_etapa, d.tipo_de_venda, d.pre_vendedor_a, pu.name as preseller_name

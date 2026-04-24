@@ -566,15 +566,20 @@ export async function GET(request: NextRequest) {
     for (let i = 0; i < allHistDates.length; i++) dateIndexMap.set(allHistDates[i], i);
     const histN = allHistDates.length;
 
-    // Stage thresholds for SZS — stageByDay (stock): open deals per stage bucket per day
-    const TH_SQL_SZS = 4;        // cumulative: stage_order >= 4 → SQL+
-    const TH_OPP_SZS = 8;        // cumulative: stage_order >= 8 → OPP+
-    const AGDADOS_ORDER_SZS = 11; // exclusive: stage_order = 11 → Ag.Dados (key: reserva)
-    const CONTRATO_ORDER_SZS = 12; // exclusive: stage_order = 12 → Contrato
+    // SZS pipeline 14 (12 stages) — thresholds acumulados, matching SZI logic:
+    //   MQL = stage_order >= 1 (exclusivo até SQL-1)
+    //   SQL >= 4 (Qualificado), OPP >= 8 (Reunião Realizada),
+    //   Reserva >= 11 (Aguardando Dados), Contrato >= 12 (Contrato)
+    const TH_MQL_SZS = 1;
+    const TH_SQL_SZS = 4;
+    const TH_OPP_SZS = 8;
+    const TH_RESERVA_SZS = 11;
+    const TH_CONTRATO_SZS = 12;
 
     const SZS_HIST_STAGES = ["mql", "sql", "opp", "reserva", "contrato", "won"] as const;
 
-    // szsStageByDay[channel][stage][dayIdx] — stock counts, not cumulative delta
+    // szsStageByDay[channel][stage][dayIdx] — stock de deals OPEN por etapa por dia.
+    // Won: conta no dia do won_time. Lost: não entra no histórico (matching SZI).
     const szsStageByDay: Record<string, Record<string, number[]>> = {};
     for (const ch of CHANNEL_ORDER) {
       szsStageByDay[ch] = { total: new Array(histN).fill(0) };
@@ -592,38 +597,23 @@ export async function GET(request: NextRequest) {
       const targets = getChannelTabs(canalGroup);
 
       if (d.status === "open") {
-        // Stock: count in current stage bucket for every day from addIdx to today
+        // Stock: conta em cada bucket cumulativo todo dia desde addIdx.
         for (let i = addIdx; i < histN; i++) {
           for (const ch of targets) {
             if (!szsStageByDay[ch]) continue;
             szsStageByDay[ch]["total"][i]++;
-            if (so >= 1 && so < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
+            if (so >= TH_MQL_SZS && so < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
             if (so >= TH_SQL_SZS) szsStageByDay[ch]["sql"][i]++;
             if (so >= TH_OPP_SZS) szsStageByDay[ch]["opp"][i]++;
-            if (so === AGDADOS_ORDER_SZS) szsStageByDay[ch]["reserva"][i]++;
-            if (so === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
+            if (so >= TH_RESERVA_SZS) szsStageByDay[ch]["reserva"][i]++;
+            if (so >= TH_CONTRATO_SZS) szsStageByDay[ch]["contrato"][i]++;
           }
         }
-      } else {
-        // Won/lost: count in stage buckets during their active period (addIdx → closeIdx)
-        // so historical days show deals that were open then (not just currently-open deals)
-        const closeDay = d.status === "won" ? d.won_time?.substring(0, 10) : d.lost_time?.substring(0, 10);
-        const closeIdx = closeDay ? (dateIndexMap.get(closeDay) ?? histN - 1) : histN - 1;
-        const mso = d.max_stage_order || d.stage_order || 0;
-        for (let i = addIdx; i <= closeIdx && i < histN; i++) {
-          for (const ch of targets) {
-            if (!szsStageByDay[ch]) continue;
-            szsStageByDay[ch]["total"][i]++;
-            if (mso >= 1 && mso < TH_SQL_SZS) szsStageByDay[ch]["mql"][i]++;
-            if (mso >= TH_SQL_SZS) szsStageByDay[ch]["sql"][i]++;
-            if (mso >= TH_OPP_SZS) szsStageByDay[ch]["opp"][i]++;
-            if (mso === AGDADOS_ORDER_SZS) szsStageByDay[ch]["reserva"][i]++;
-            if (mso === CONTRATO_ORDER_SZS) szsStageByDay[ch]["contrato"][i]++;
-          }
-        }
-        // Won count on won_time day
-        if (d.status === "won" && closeDay) {
-          const wonIdx = dateIndexMap.get(closeDay);
+      } else if (d.status === "won") {
+        // Won: conta só no dia do won_time (matching SZI).
+        const wonDay = d.won_time?.substring(0, 10);
+        if (wonDay) {
+          const wonIdx = dateIndexMap.get(wonDay);
           if (wonIdx !== undefined) {
             for (const ch of targets) {
               if (!szsStageByDay[ch]) continue;
@@ -632,6 +622,7 @@ export async function GET(request: NextRequest) {
           }
         }
       }
+      // Lost: ignorado no histórico (matching SZI).
     }
 
     // Build snapHistMap from szsStageByDay
@@ -724,8 +715,8 @@ export async function GET(request: NextRequest) {
           if (so >= 1 && so < TH_SQL_SZS) nektLastStage[ch]["mql"]++;
           if (so >= TH_SQL_SZS) nektLastStage[ch]["sql"]++;
           if (so >= TH_OPP_SZS) nektLastStage[ch]["opp"]++;
-          if (so === AGDADOS_ORDER_SZS) nektLastStage[ch]["reserva"]++;
-          if (so === CONTRATO_ORDER_SZS) nektLastStage[ch]["contrato"]++;
+          if (so >= TH_RESERVA_SZS) nektLastStage[ch]["reserva"]++;
+          if (so >= TH_CONTRATO_SZS) nektLastStage[ch]["contrato"]++;
         }
       }
 
@@ -737,8 +728,8 @@ export async function GET(request: NextRequest) {
         if (so >= 1 && so < TH_SQL_SZS) gMQL++;
         if (so >= TH_SQL_SZS) gSQL++;
         if (so >= TH_OPP_SZS) gOPP++;
-        if (so === AGDADOS_ORDER_SZS) gReserva++;
-        if (so === CONTRATO_ORDER_SZS) gContrato++;
+        if (so >= TH_RESERVA_SZS) gReserva++;
+        if (so >= TH_CONTRATO_SZS) gContrato++;
       }
       nektLastStage["Geral"] = { mql: gMQL, sql: gSQL, opp: gOPP, reserva: gReserva, contrato: gContrato, won: 0 };
 
