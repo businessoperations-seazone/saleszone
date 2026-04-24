@@ -17,8 +17,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # NEXT_PUBLIC_* são bakeadas no bundle JS em build-time. Coolify passa via --build-arg.
 ARG NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder
+ARG NEXT_PUBLIC_DB_SCHEMA=public
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_DB_SCHEMA=$NEXT_PUBLIC_DB_SCHEMA
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
