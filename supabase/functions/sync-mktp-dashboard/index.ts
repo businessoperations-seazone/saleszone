@@ -1,7 +1,8 @@
 // MKTP (Marketplace) module — auto-generated from SZI equivalent
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_REF = "cncistmevwwghtaiyaao";
+// SUPABASE_REF derivado do env SUPABASE_URL em runtime (ex: https://gamswizeexihaymfweeq.supabase.co → gamswizeexihaymfweeq)
+const SUPABASE_REF = (Deno.env.get("SUPABASE_URL") || "").replace(/^https?:\/\//, "").split(".")[0];
 
 // params uses array of [key, value] pairs to support duplicate keys (e.g. date=gte&date=lte)
 async function restDelete(svcKey: string, table: string, params: [string, string][]): Promise<{ error: string | null }> {

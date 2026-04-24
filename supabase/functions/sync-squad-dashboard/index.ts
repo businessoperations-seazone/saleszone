@@ -6,7 +6,7 @@ const corsHeaders = {
 };
 
 // ---- Constants ----
-const SUPABASE_REF = "cncistmevwwghtaiyaao"; // Supabase project reference (extracted from SUPABASE_URL)
+const SUPABASE_REF = (Deno.env.get("SUPABASE_URL") || "").replace(/^https?:\/\//, "").split(".")[0];
 const PIPELINE_ID = 28;
 const STAGE_RESERVA = 191;
 const STAGE_CONTRATO = 192;

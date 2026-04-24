@@ -5,7 +5,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS"
 };
-const SUPABASE_REF = "cncistmevwwghtaiyaao";
+const SUPABASE_REF = (Deno.env.get("SUPABASE_URL") || "").replace(/^https?:\/\//, "").split(".")[0];
 
 // ---- REST API helpers (replaces Supabase JS client for DB writes — silent failure bug in Deno) ----
 // params uses array of [key, value] pairs to support duplicate keys (e.g. date=gte&date=lte)
