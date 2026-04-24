@@ -84,10 +84,16 @@ interface ResultadosMKTPData {
 
 export const dynamic = "force-dynamic";
 
-/* ── Extract date from timestamp (no timezone shift — Pipedrive dates are already local) ── */
+/* ── Extract BRT date from UTC timestamp.
+   Pipedrive retorna times em UTC. Deal ganho em "2026-04-01 00:45:41 UTC" é
+   2026-03-31 21:45 BRT (UTC-3). substring(0,10) direto contava esse deal em
+   abril, divergindo do Pipedrive UI que exibe em BRT. ── */
 function toDate(ts: string | null | undefined): string | null {
   if (!ts) return null;
-  return ts.substring(0, 10);
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts.substring(0, 10);
+  const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000);
+  return brt.toISOString().substring(0, 10);
 }
 
 /* ── Tab → date column in mktp_deals ─────────────────────── */
@@ -174,37 +180,37 @@ export async function GET() {
       prevWon["Funil Completo"] = (prevWon["Funil Completo"] || 0) + 1;
     }
 
-    /* ── 3b. Reserva/Contrato do mês — via reserva_entered_at / contrato_entered_at ── */
-    // Deals que ENTRARAM na etapa Reserva (305) ou Contrato (271) no mês, via Nekt deal_flow.
+    /* ── 3b. Reserva/Contrato acumulado do mês (coorte via max_stage_order).
+       Deals que passaram por Reserva (mso>=12) ou Contrato (mso>=13) e estão
+       abertos ou fecharam no mês, excluindo "Duplicado/Erro". Colunas
+       reserva_entered_at/contrato_entered_at NÃO existem em mktp_deals — este
+       bloco usa max_stage_order que é populado pelo sync. Usado apenas para
+       "Funil Completo" (canais VD/Parcerias continuam snapshot). ── */
     const nextMonthStart = `${new Date(year, month + 1, 1).toISOString().substring(0, 10)}`;
-    const [reservaMesRows, contratoMesRows] = await Promise.all([
-      paginate((o, ps) =>
-        admin.from("mktp_deals").select("canal, lost_reason")
-          .gte("reserva_entered_at", startDate).lt("reserva_entered_at", nextMonthStart)
-          .range(o, o + ps - 1)
-      ),
-      paginate((o, ps) =>
-        admin.from("mktp_deals").select("canal, lost_reason")
-          .gte("contrato_entered_at", startDate).lt("contrato_entered_at", nextMonthStart)
-          .range(o, o + ps - 1)
-      ),
-    ]);
+    const RESERVA_MIN_ORDER = 12;
+    const CONTRATO_MIN_ORDER = 13;
 
     const funnelReserva: Record<string, number> = {};
     const funnelContrato: Record<string, number> = {};
     for (const ch of CHANNEL_ORDER) { funnelReserva[ch] = 0; funnelContrato[ch] = 0; }
 
-    for (const deal of reservaMesRows) {
+    for (const deal of deals) {
       if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
+      const closeDate = deal.status === "won" ? toDate(deal.won_time) : toDate(deal.lost_time);
+      const isOpen = deal.status === "open";
+      if (!isOpen && (!closeDate || closeDate < startDate || closeDate >= nextMonthStart)) continue;
+
+      const mso = deal.max_stage_order || 0;
       const group = getCanalGroup(String(deal.canal || ""));
-      funnelReserva[group]++;
-      funnelReserva["Funil Completo"]++;
-    }
-    for (const deal of contratoMesRows) {
-      if (deal.lost_reason && String(deal.lost_reason).toLowerCase() === "duplicado/erro") continue;
-      const group = getCanalGroup(String(deal.canal || ""));
-      funnelContrato[group]++;
-      funnelContrato["Funil Completo"]++;
+
+      if (mso >= RESERVA_MIN_ORDER) {
+        funnelReserva[group]++;
+        funnelReserva["Funil Completo"]++;
+      }
+      if (mso >= CONTRATO_MIN_ORDER) {
+        funnelContrato[group]++;
+        funnelContrato["Funil Completo"]++;
+      }
     }
 
     /* ── 4. Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ── */
@@ -502,8 +508,10 @@ export async function GET() {
         metrics,
         lastMonthWon: prevWon[name] || 0,
         snapshots: {
-          aguardandoDados: snap.reserva || 0,
-          emContrato: snap.contrato || 0,
+          // Funil Completo: acumulado do mês (passou por Reserva/Contrato).
+          // VD/Parcerias: snapshot de abertos no stage (305/271).
+          aguardandoDados: name === "Funil Completo" ? (funnelReserva[name] || 0) : (snap.reserva || 0),
+          emContrato: name === "Funil Completo" ? (funnelContrato[name] || 0) : (snap.contrato || 0),
         },
         // Parcerias não tem reuniões — zera No-Show e Ocupação Agenda
         ocupacaoAgenda: name === "Parcerias" ? { agendadas: 0, capacidade: 0, percent: 0 } : { agendadas: agendaByChannelMktp[name] ?? 0, capacidade: totalCapacity, percent: totalCapacity > 0 ? Math.round(((agendaByChannelMktp[name] ?? 0) / totalCapacity) * 1000) / 10 : 0 },
