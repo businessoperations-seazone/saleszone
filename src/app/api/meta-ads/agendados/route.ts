@@ -21,9 +21,9 @@ export async function GET() {
       FROM nekt_silver.pipedrive_deals_readable
       WHERE status = 'open'
         AND (
-          (pipeline_id = 28 AND CAST(etapa AS INTEGER) = 187)
-          OR (pipeline_id = 14 AND CAST(etapa AS INTEGER) = 73)
-          OR (pipeline_id = 37 AND CAST(etapa AS INTEGER) = 284)
+          (pipeline_id = 28 AND CAST(stage AS INTEGER) = 187)
+          OR (pipeline_id = 14 AND CAST(stage AS INTEGER) = 73)
+          OR (pipeline_id = 37 AND CAST(stage AS INTEGER) = 284)
         )
     `
 

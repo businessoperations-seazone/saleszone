@@ -450,7 +450,7 @@ export async function GET(request: NextRequest) {
         const nektSnaps = await queryNekt(`
           SELECT etapa, canal, deal_owner_name
           FROM nekt_silver.pipedrive_deals_readable
-          WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) IN (152, 76)
+          WHERE status = 'open' AND pipeline_id = 14 AND CAST(stage AS INTEGER) IN (152, 76)
           ${getNektCidadeSQL(cityFilter)}
         `);
 
@@ -492,7 +492,7 @@ export async function GET(request: NextRequest) {
 
 
         for (const row of nektSnaps.rows) {
-          const stageId = parseInt(String(row.etapa || "0"));
+          const stageId = parseInt(String(row.stage || "0"));
           const canalName = String(row.canal || "");
           const canalGroup = NEKT_CANAL_NAME_TO_GROUP[canalName] || "Outros";
           const tabs = getChannelTabs(canalGroup);
@@ -503,8 +503,8 @@ export async function GET(request: NextRequest) {
         }
 
         // Geral = total real (todos os deals)
-        snapshots.Geral.agDados = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 152).length;
-        snapshots.Geral.contrato = nektSnaps.rows.filter(r => parseInt(String(r.etapa || "0")) === 76).length;
+        snapshots.Geral.agDados = nektSnaps.rows.filter(r => parseInt(String(r.stage || "0")) === 152).length;
+        snapshots.Geral.contrato = nektSnaps.rows.filter(r => parseInt(String(r.stage || "0")) === 76).length;
         console.log(`[szs-resultados] ag/contrato: Geral=${snapshots.Geral.agDados}/${snapshots.Geral.contrato}, VD=${snapshots["Vendas Diretas"].agDados}/${snapshots["Vendas Diretas"].contrato}, Parc=${snapshots.Parceiros.agDados}/${snapshots.Parceiros.contrato}, Exp=${snapshots["Expansão"].agDados}/${snapshots["Expansão"].contrato}`);
       } catch (e) {
         console.warn("[szs-resultados] Nekt indisponível para ag/contrato, usando szs_open_snapshots:", e);
@@ -698,7 +698,7 @@ export async function GET(request: NextRequest) {
       for (const ch of CHANNEL_ORDER) nektChannelOpen[ch] = 0;
 
       for (const r of nektSZSAll.rows) {
-        const stageId = parseInt(String(r.etapa || "0"));
+        const stageId = parseInt(String(r.stage || "0"));
         const so = SZS_STAGE_ORDER_MAP[stageId] || 0;
         const canalGroup = NEKT_CANAL_SZS[String(r.canal || "")] || "Outros";
 
@@ -723,7 +723,7 @@ export async function GET(request: NextRequest) {
       // Geral = direct count of all deals (no double-counting from channel tabs)
       let gMQL = 0, gSQL = 0, gOPP = 0, gReserva = 0, gContrato = 0;
       for (const r of nektSZSAll.rows) {
-        const so = SZS_STAGE_ORDER_MAP[parseInt(String(r.etapa || "0"))] || 0;
+        const so = SZS_STAGE_ORDER_MAP[parseInt(String(r.stage || "0"))] || 0;
         if (so === 0) continue;
         if (so >= 1 && so < TH_SQL_SZS) gMQL++;
         if (so >= TH_SQL_SZS) gSQL++;
@@ -803,7 +803,7 @@ export async function GET(request: NextRequest) {
     try {
       const nektResult = await queryNekt(`
         SELECT 1 FROM nekt_silver.pipedrive_deals_readable
-        WHERE status = 'open' AND pipeline_id = 14 AND CAST(etapa AS INTEGER) = 73
+        WHERE status = 'open' AND pipeline_id = 14 AND CAST(stage AS INTEGER) = 73
       `);
       agendaByChannel["Geral"] = nektResult.rows.length;
       console.log(`[szs/agendados] Nekt Geral: ${agendaByChannel["Geral"]} deals no stage Agendado`);

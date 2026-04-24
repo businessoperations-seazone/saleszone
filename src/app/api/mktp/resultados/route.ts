@@ -294,10 +294,10 @@ export async function GET() {
     // Reserva/Contrato do Funil Completo: Nekt real-time (evita stale do daily_snapshot)
     try {
       const nektMktp = await queryNekt(`
-        SELECT CAST(etapa AS INTEGER) as stage_id, COUNT(*) as total
+        SELECT CAST(stage AS INTEGER) as stage_id, COUNT(*) as total
         FROM nekt_silver.pipedrive_deals_readable
-        WHERE status = 'open' AND pipeline_id = 37 AND CAST(etapa AS INTEGER) IN (305, 271)
-        GROUP BY CAST(etapa AS INTEGER)
+        WHERE status = 'open' AND pipeline_id = 37 AND CAST(stage AS INTEGER) IN (305, 271)
+        GROUP BY CAST(stage AS INTEGER)
       `);
       for (const r of nektMktp.rows) {
         const sid = parseInt(String(r.stage_id || "0"));
