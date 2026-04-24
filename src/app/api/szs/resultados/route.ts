@@ -208,22 +208,21 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // szs_daily_counts was synced with the wrong Nekt column (cidade_do_imovel instead of
-    // cidade_onde_fica_o_imovel), so Parceiros/Expansão city data is missing ("Sem cidade").
-    // When city filter is active, re-count MQL/SQL/OPP/WON directly from Nekt.
-    // For Parceiros deals, cidade_onde_fica_o_imovel is not reliably filled in Nekt.
-    // We run a second Nekt query for all Parceiros canals (no city filter), then filter
-    // in JS by Sapron deal IDs which are the source of truth for Parceiros city.
-    if (cityFilter) {
+    // Always re-count MQL/SQL/OPP/WON directly from Nekt (source of truth).
+    // szs_daily_counts has known bugs (wrong Nekt column for city sync, potential
+    // double-counting between open/won/lost sources), so Nekt overrides it.
+    // For Parceiros deals with city filter, cidade_onde_fica_o_imovel is not reliably
+    // filled in Nekt; we supplement via Sapron deal IDs as source of truth for city.
+    {
       try {
         const nextMonthDt = new Date(year, month + 1, 1);
         const nextMonthDate = `${nextMonthDt.getFullYear()}-${String(nextMonthDt.getMonth() + 1).padStart(2, "0")}-01`;
         const lookbackDt = new Date(year, month - 11, 1);
         const lookbackStr = `${lookbackDt.getFullYear()}-${String(lookbackDt.getMonth() + 1).padStart(2, "0")}-01`;
 
-        // Step 1: Sapron deal IDs for this city (Parceiros source of truth)
+        // Step 1: Sapron deal IDs for this city (Parceiros source of truth) — só com cityFilter
         let sapronPartnerIds = new Set<string>()
-        if (cityFilter !== "Outros") {
+        if (cityFilter && cityFilter !== "Outros") {
           try {
             let sapronCityWhere: string
             if (cityFilter === "São Paulo")
@@ -326,9 +325,9 @@ export async function GET(request: NextRequest) {
           channelCounts[ch].opp = nektCC[ch].opp;
           channelCounts[ch].won = nektCC[ch].won;
         }
-        console.log(`[szs-resultados] Nekt city (${cityFilter}) rows=${nektRows.rows.length}: Geral=${nektCC.Geral.mql}/${nektCC.Geral.sql}/${nektCC.Geral.opp}/${nektCC.Geral.won} Parc=${nektCC.Parceiros.mql}/${nektCC.Parceiros.sql}/${nektCC.Parceiros.opp}/${nektCC.Parceiros.won}`);
+        console.log(`[szs-resultados] Nekt override (city=${cityFilter || "all"}) rows=${nektRows.rows.length}: Geral=${nektCC.Geral.mql}/${nektCC.Geral.sql}/${nektCC.Geral.opp}/${nektCC.Geral.won} VD=${nektCC["Vendas Diretas"].mql}/${nektCC["Vendas Diretas"].sql}/${nektCC["Vendas Diretas"].opp}/${nektCC["Vendas Diretas"].won} Parc=${nektCC.Parceiros.mql}/${nektCC.Parceiros.sql}/${nektCC.Parceiros.opp}/${nektCC.Parceiros.won} Exp=${nektCC["Expansão"].mql}/${nektCC["Expansão"].sql}/${nektCC["Expansão"].opp}/${nektCC["Expansão"].won}`);
       } catch (e) {
-        console.warn("[szs-resultados] Nekt city query failed, falling back to szs_daily_counts:", e);
+        console.warn("[szs-resultados] Nekt override failed, falling back to szs_daily_counts:", e);
       }
     }
 
