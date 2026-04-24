@@ -457,10 +457,19 @@ export async function GET() {
       const oppTotal = totalMetasByTab.opp || legacyMetas["Funil Completo"]?.opp || 128;
       const wonFromMeta = totalMetasByTab.won || legacyMetas["Funil Completo"]?.won || 15;
 
+      // Math.round em tudo: mktp_metas pode vir com valores decimais (forecast
+      // por squad_id), mas metas exibidas devem ser inteiras como VD/Parcerias.
       metas["Funil Completo"] = {
-        mql: mqlTotal, sql: sqlTotal, opp: oppTotal, won: wonFromMeta,
-        reserva: totalMetasByTab.reserva || legacyMetas["Funil Completo"]?.reserva,
-        contrato: totalMetasByTab.contrato || legacyMetas["Funil Completo"]?.contrato,
+        mql: Math.round(mqlTotal),
+        sql: Math.round(sqlTotal),
+        opp: Math.round(oppTotal),
+        won: Math.round(wonFromMeta),
+        reserva: totalMetasByTab.reserva != null
+          ? Math.round(totalMetasByTab.reserva)
+          : legacyMetas["Funil Completo"]?.reserva,
+        contrato: totalMetasByTab.contrato != null
+          ? Math.round(totalMetasByTab.contrato)
+          : legacyMetas["Funil Completo"]?.contrato,
       };
       metas["Vendas Diretas"] = {
         mql: Math.round(mqlTotal * wonRatioVD), sql: Math.round(sqlTotal * wonRatioVD),
