@@ -3,7 +3,7 @@ import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
 import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
 import { getModuleConfig } from "@/lib/modules";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 import { querySapron } from "@/lib/sapron";
 
 /* ── Canal group → macro channels (for counts aggregation) ── */
@@ -118,6 +118,22 @@ function getNektCidadeSQL(cityFilter: string | null): string {
   if (cityFilter === "Florianópolis") return "AND cidade_onde_fica_o_imovel = 'Florianópolis, SC'";
   // "Outros": qualquer cidade que não seja uma das 3 (inclui null/vazio)
   return "AND (cidade_onde_fica_o_imovel IS NULL OR cidade_onde_fica_o_imovel NOT IN ('São Paulo, SP', 'Salvador, BA', 'Florianópolis, SC'))";
+}
+
+// Filtro de cidade para ads_unificado (campaign_name LIKE — campanhas SZS seguem padrão [SS] [LEAD] [CIDADE])
+function getNektCampaignCitySQL(cityFilter: string | null): string {
+  if (!cityFilter) return "";
+  if (cityFilter === "São Paulo")
+    return "AND (LOWER(campaign_name) LIKE '%são paulo%' OR LOWER(campaign_name) LIKE '%sao paulo%')";
+  if (cityFilter === "Salvador")
+    return "AND LOWER(campaign_name) LIKE '%salvador%'";
+  if (cityFilter === "Florianópolis")
+    return "AND (LOWER(campaign_name) LIKE '%florianopolis%' OR LOWER(campaign_name) LIKE '%florianópolis%')";
+  return `AND LOWER(campaign_name) NOT LIKE '%são paulo%'
+          AND LOWER(campaign_name) NOT LIKE '%sao paulo%'
+          AND LOWER(campaign_name) NOT LIKE '%salvador%'
+          AND LOWER(campaign_name) NOT LIKE '%florianopolis%'
+          AND LOWER(campaign_name) NOT LIKE '%florianópolis%'`;
 }
 
 interface MetricPair { real: number; meta: number }
@@ -343,79 +359,56 @@ export async function GET(request: NextRequest) {
       for (const tab of tabs) prevWon[tab] = (prevWon[tab] || 0) + 1;
     }
 
-    const metaRows = await paginate((o, ps) =>
-      admin.from("szs_meta_ads").select("ad_id, spend_month, empreendimento").gte("snapshot_date", startDate).range(o, o + ps - 1)
-    );
-
-    // ── Orçamento do mês de szs_orcamento ──
-    const { data: orcData } = await admin
-      .from("szs_orcamento")
-      .select("orcamento_total")
-      .eq("mes", monthKey)
-      .maybeSingle();
-    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
-
-    // Fallback 1: soma dos budgets aprovados por empreendimento
-    if (!orcamentoMeta) {
-      const { data: approvedRows } = await admin
-        .from("szs_orcamento_approved")
-        .select("budget_recomendado")
-        .eq("mes", monthKey);
-      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
-    }
-    // Fallback 2: mês mais recente disponível em szs_orcamento
-    if (!orcamentoMeta) {
-      const { data: prevOrc } = await admin
+    // ── Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ──
+    // Meta: nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable.ads_venda_spot
+    // Real: SUM(spend) de nekt_silver.ads_unificado WHERE vertical='SZS'
+    // City filter aplicado via campaign_name LIKE (campanhas SZS seguem padrão [SS] [LEAD] [CIDADE])
+    const nextMonthDate = new Date(year, month + 1, 1).toISOString().substring(0, 10);
+    let orcamentoMeta = 0;
+    let totalSpend = 0;
+    try {
+      const budget = await getNektBudget(
+        "SZS",
+        "ads_venda_spot",
+        startDate,
+        nextMonthDate,
+        getNektCampaignCitySQL(cityFilter),
+      );
+      // Orçamento Nekt é total (sem breakdown por cidade). Se cityFilter ativo, escala
+      // proporcionalmente pelo ratio do gasto da cidade vs gasto total.
+      if (cityFilter) {
+        const fullSpendRes = await queryNekt(`
+          SELECT SUM(spend) as total FROM nekt_silver.ads_unificado
+          WHERE vertical = 'SZS'
+            AND date >= DATE '${startDate}' AND date < DATE '${nextMonthDate}'
+        `);
+        const fullSpend = Number(fullSpendRes.rows[0]?.total || 0);
+        const ratio = fullSpend > 0 ? budget.spend / fullSpend : 0;
+        orcamentoMeta = Math.round(budget.orcamento * ratio);
+      } else {
+        orcamentoMeta = Math.round(budget.orcamento);
+      }
+      totalSpend = budget.spend;
+      console.log(`[szs-resultados] Nekt budget${cityFilter ? ` (${cityFilter})` : ""}: meta=${orcamentoMeta} spend=${Math.round(totalSpend)}`);
+    } catch (e) {
+      console.warn("[szs-resultados] Nekt budget query failed, fallback para szs_orcamento + szs_meta_ads:", e);
+      const { data: orcData } = await admin
         .from("szs_orcamento")
         .select("orcamento_total")
-        .lt("mes", monthKey)
-        .order("mes", { ascending: false })
-        .limit(1)
+        .eq("mes", monthKey)
         .maybeSingle();
-      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
-    }
-    // Dedup: max spend_month per ad_id (multiple snapshots in the month)
-    // When city filter is active, only include Meta ads for that city
-    const adSpend = new Map<string, number>();
-    for (const r of metaRows) {
-      if (cityFilter && getCidadeGroup(String(r.empreendimento || "")) !== cityFilter) continue;
-      const spend = Number(r.spend_month) || 0;
-      const cur = adSpend.get(r.ad_id) || 0;
-      if (spend > cur) adSpend.set(r.ad_id, spend);
-    }
-    let totalSpend = 0;
-    for (const v of adSpend.values()) totalSpend += v;
-
-    // Add Google Ads spend from Nekt ads_unificado (SZS vertical, Google platform)
-    // City filter applied via campaign_name LIKE matching
-    try {
-      const nextMonthDate = new Date(year, month + 1, 1).toISOString().substring(0, 10)
-      let googleCitySQL = ""
-      if (cityFilter === "São Paulo")
-        googleCitySQL = "AND (LOWER(campaign_name) LIKE '%são paulo%' OR LOWER(campaign_name) LIKE '%sao paulo%')"
-      else if (cityFilter === "Salvador")
-        googleCitySQL = "AND LOWER(campaign_name) LIKE '%salvador%'"
-      else if (cityFilter === "Florianópolis")
-        googleCitySQL = "AND (LOWER(campaign_name) LIKE '%florianopolis%' OR LOWER(campaign_name) LIKE '%florianópolis%')"
-      else if (cityFilter === "Outros")
-        googleCitySQL = `AND LOWER(campaign_name) NOT LIKE '%são paulo%' AND LOWER(campaign_name) NOT LIKE '%sao paulo%'
-          AND LOWER(campaign_name) NOT LIKE '%salvador%'
-          AND LOWER(campaign_name) NOT LIKE '%florianopolis%' AND LOWER(campaign_name) NOT LIKE '%florianópolis%'`
-
-      const googleRows = await queryNekt(`
-        SELECT SUM(spend) as total
-        FROM nekt_silver.ads_unificado
-        WHERE vertical = 'SZS'
-          AND LOWER(plataforma) LIKE '%google%'
-          AND date >= '${startDate}'
-          AND date < '${nextMonthDate}'
-          ${googleCitySQL}
-      `)
-      const googleSpend = Number(googleRows.rows[0]?.total || 0)
-      totalSpend += googleSpend
-      console.log(`[szs-resultados] Google Ads spend${cityFilter ? ` (${cityFilter})` : ""}: ${googleSpend}`)
-    } catch (e) {
-      console.warn("[szs-resultados] Google Ads spend query failed:", e)
+      orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+      const metaRows = await paginate((o, ps) =>
+        admin.from("szs_meta_ads").select("ad_id, spend_month, empreendimento").gte("snapshot_date", startDate).range(o, o + ps - 1)
+      );
+      const adSpend = new Map<string, number>();
+      for (const r of metaRows) {
+        if (cityFilter && getCidadeGroup(String(r.empreendimento || "")) !== cityFilter) continue;
+        const spend = Number(r.spend_month) || 0;
+        const cur = adSpend.get(r.ad_id) || 0;
+        if (spend > cur) adSpend.set(r.ad_id, spend);
+      }
+      for (const v of adSpend.values()) totalSpend += v;
     }
 
     // Snapshots from pipedrive_daily_snapshot (pipeline 14)

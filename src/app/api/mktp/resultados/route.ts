@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 
 /* ── Channel definitions ──────────────────────────────────── */
 const CHANNEL_ORDER = ["Funil Completo", "Vendas Diretas", "Parcerias"] as const;
@@ -207,58 +207,50 @@ export async function GET() {
       funnelContrato["Funil Completo"]++;
     }
 
-    /* ── 4. Meta Ads spend (max por ad_id, soma = gasto real do mês) ── */
-    const metaRows = await paginate((o, ps) =>
-      admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
-    );
-
-    /* ── 4a. Orçamento do mês de mktp_orcamento ── */
-    const { data: orcData } = await admin
-      .from("mktp_orcamento")
-      .select("orcamento_total")
-      .eq("mes", monthKey)
-      .maybeSingle();
-    let orcamentoMeta = Number(orcData?.orcamento_total) || 0;
-
-    // Fallback 1: soma dos budgets aprovados por empreendimento
-    if (!orcamentoMeta) {
-      const { data: approvedRows } = await admin
-        .from("mktp_orcamento_approved")
-        .select("budget_recomendado")
-        .eq("mes", monthKey);
-      orcamentoMeta = (approvedRows || []).reduce((s: number, r: { budget_recomendado: unknown }) => s + (Number(r.budget_recomendado) || 0), 0);
-    }
-    // Fallback 2: mês mais recente disponível em mktp_orcamento
-    if (!orcamentoMeta) {
-      const { data: prevOrc } = await admin
+    /* ── 4. Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ── */
+    // Meta: nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable.ads_marketplace
+    // Real: SUM(spend) de nekt_silver.ads_unificado WHERE vertical='Marketplace'
+    let orcamentoMeta = 0;
+    let totalSpend = 0;
+    try {
+      const budget = await getNektBudget(
+        "Marketplace",
+        "ads_marketplace",
+        startDate,
+        nextMonthStart,
+      );
+      orcamentoMeta = Math.round(budget.orcamento);
+      totalSpend = budget.spend;
+      console.log(`[mktp/resultados] Nekt budget: meta=${orcamentoMeta} spend=${Math.round(totalSpend)}`);
+    } catch (e) {
+      console.warn("[mktp/resultados] Nekt budget query failed, fallback para mktp_orcamento + mktp_meta_ads:", e);
+      const { data: orcData } = await admin
         .from("mktp_orcamento")
         .select("orcamento_total")
-        .lt("mes", monthKey)
-        .order("mes", { ascending: false })
-        .limit(1)
+        .eq("mes", monthKey)
         .maybeSingle();
-      orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+      orcamentoMeta = Number(orcData?.orcamento_total) || 0;
+      const metaRows = await paginate((o, ps) =>
+        admin.from("mktp_meta_ads").select("ad_id, spend_month").range(o, o + ps - 1)
+      );
+      const spendByAd = new Map<string, number>();
+      for (const r of metaRows) {
+        const adId = r.ad_id as string;
+        const spend = r.spend_month || 0;
+        spendByAd.set(adId, Math.max(spendByAd.get(adId) || 0, spend));
+      }
+      for (const v of spendByAd.values()) totalSpend += v;
     }
 
     /* ── 4b. Metas do mês de mktp_metas (fallback para hardcoded se vazio) ── */
     const { data: mktpMetasRows } = await admin
       .from("mktp_metas").select("tab, meta").eq("month", `${monthKey}-01`);
-    // Aggregate total metas by tab (mql, sql, opp, won, reserva, contrato)
     const totalMetasByTab: Record<string, number> = {};
     for (const r of mktpMetasRows || []) {
       totalMetasByTab[r.tab] = (totalMetasByTab[r.tab] || 0) + (Number(r.meta) || 0);
     }
-    // If mktp_metas has data, use it to build metas per channel
     const totalWonMeta = totalMetasByTab.won || 0;
     const hasMetasData = Object.keys(totalMetasByTab).length > 0;
-    const spendByAd = new Map<string, number>();
-    for (const r of metaRows) {
-      const adId = r.ad_id as string;
-      const spend = r.spend_month || 0;
-      spendByAd.set(adId, Math.max(spendByAd.get(adId) || 0, spend));
-    }
-    let totalSpend = 0;
-    for (const v of spendByAd.values()) totalSpend += v;
 
     /* ── 5. Snapshots from pipedrive_daily_snapshot (pipeline 37) ── */
     const today = now.toISOString().substring(0, 10);

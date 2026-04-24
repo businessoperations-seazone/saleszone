@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { createSquadSupabaseAdmin, hasServiceRole } from "@/lib/squad/supabase";
 import { createAuthenticatedSupabaseAdmin } from "@/lib/supabase/server";
 import { paginate } from "@/lib/paginate";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 import type { GeralData, GeralChannelResult, GeralMetricPair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -244,31 +244,44 @@ export async function GET(req: NextRequest) {
       if (macro === "Vendas Diretas" || macro === "Parceiros") prevWon[macro]++;
     }
 
-    // ── 4. Meta Ads spend + leads (Vendas Diretas only) ──
-    const metaRows = await paginate((o, ps) =>
-      supabase
-        .from("squad_meta_ads")
-        .select("ad_id, spend_month, leads_month")
-        .gte("snapshot_date", startDate)
-        .range(o, o + ps - 1),
-    );
-    const adMax = new Map<string, { spend: number; leads: number }>();
-    for (const r of metaRows) {
-      const spend = Number(r.spend_month) || 0;
-      const leads = Number(r.leads_month) || 0;
-      const cur = adMax.get(r.ad_id);
-      if (!cur || spend > cur.spend) adMax.set(r.ad_id, { spend, leads });
+    // ── 4. Orçamento (meta) + Gasto real (Facebook + Google) — ambos do Nekt ──
+    // Meta: nekt_silver.orcamento_mkt_szi_szs_mktp_hosp_cco_lovable.ads_proprietario
+    // Real: SUM(spend) de nekt_silver.ads_unificado WHERE vertical='Investimentos'
+    let orcamentoMeta = 0;
+    let totalSpend = 0;
+    try {
+      const budget = await getNektBudget(
+        "Investimentos",
+        "ads_proprietario",
+        startDate,
+        nextMonthStart,
+      );
+      orcamentoMeta = Math.round(budget.orcamento);
+      totalSpend = budget.spend;
+      console.log(`[geral] Nekt budget SZI: meta=${orcamentoMeta} spend=${Math.round(totalSpend)}`);
+    } catch (e) {
+      console.warn("[geral] Nekt budget query failed, fallback para squad_orcamento + squad_meta_ads:", e);
+      const metaRows = await paginate((o, ps) =>
+        supabase
+          .from("squad_meta_ads")
+          .select("ad_id, spend_month")
+          .gte("snapshot_date", startDate)
+          .range(o, o + ps - 1),
+      );
+      const adMax = new Map<string, number>();
+      for (const r of metaRows) {
+        const spend = Number(r.spend_month) || 0;
+        const cur = adMax.get(r.ad_id) || 0;
+        if (spend > cur) adMax.set(r.ad_id, spend);
+      }
+      for (const v of adMax.values()) totalSpend += v;
+      const { data: orcData } = await supabase
+        .from("squad_orcamento")
+        .select("orcamento_total")
+        .eq("mes", monthKey)
+        .maybeSingle();
+      orcamentoMeta = orcData?.orcamento_total || 0;
     }
-    let totalSpend = 0, totalLeads = 0;
-    for (const v of adMax.values()) { totalSpend += v.spend; totalLeads += v.leads; }
-
-    // ── 5. Orçamento ──
-    const { data: orcData } = await supabase
-      .from("squad_orcamento")
-      .select("orcamento_total")
-      .eq("mes", monthKey)
-      .maybeSingle();
-    const orcamentoMeta = orcData?.orcamento_total || 0;
 
     // ── 6. Pipedrive daily snapshot (from pipedrive_daily_snapshot table, updated 1x/day) ──
     const today = now.toISOString().substring(0, 10);
