@@ -1,0 +1,4 @@
+# CODEOWNERS — Saleszone
+# Aprovação obrigatória de @luizlopes-cloud em qualquer PR pra main.
+# Edição manual: pedir para Luiz revisar antes de mexer aqui.
+* @luizlopes-cloud
