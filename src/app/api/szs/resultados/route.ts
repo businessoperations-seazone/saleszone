@@ -3,7 +3,7 @@ import { createSquadSupabaseAdmin } from "@/lib/squad/supabase";
 import { paginate } from "@/lib/paginate";
 import { getCidadeGroup, getSquadMetasFromNekt } from "@/lib/szs-utils";
 import { getModuleConfig } from "@/lib/modules";
-import { queryNekt } from "@/lib/nekt";
+import { queryNekt, getNektBudget } from "@/lib/nekt";
 import { querySapron } from "@/lib/sapron";
 
 /* ── Canal group → macro channels (for counts aggregation) ── */
@@ -376,6 +376,17 @@ export async function GET(request: NextRequest) {
         .limit(1)
         .maybeSingle();
       orcamentoMeta = Number(prevOrc?.orcamento_total) || 0;
+    }
+    // Fallback 3: Nekt orcamento_*_lovable.ads_venda_spot (fonte canônica quando szs_orcamento vazio)
+    if (!orcamentoMeta) {
+      try {
+        const nextMonthDt = new Date(year, month + 1, 1);
+        const nextMonthStart = `${nextMonthDt.getFullYear()}-${String(nextMonthDt.getMonth() + 1).padStart(2, "0")}-01`;
+        const budget = await getNektBudget("SZS", "ads_venda_spot", startDate, nextMonthStart);
+        orcamentoMeta = Math.round(budget.orcamento);
+      } catch (e) {
+        console.warn("[szs/resultados] Nekt fallback falhou:", e);
+      }
     }
     // Dedup: max spend_month per ad_id (multiple snapshots in the month)
     // When city filter is active, only include Meta ads for that city

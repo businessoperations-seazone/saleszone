@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getModuleConfig } from "@/lib/modules";
+import { getNektBudget } from "@/lib/nekt";
 import type { OrcamentoData, OrcamentoSquadBreakdown, OrcamentoEmpBreakdown, OrcamentoLogEntry } from "@/lib/types";
 
 const mc = getModuleConfig("szs");
@@ -52,7 +53,19 @@ export async function GET() {
     if (metaAllRes.error) console.warn("Meta all query error:", metaAllRes.error.message);
     if (metaLatestRes.error) console.warn("Meta latest query error:", metaLatestRes.error.message);
 
-    const orcamentoTotal = Number(orcRes.data?.orcamento_total) || 0;
+    let orcamentoTotal = Number(orcRes.data?.orcamento_total) || 0;
+
+    // Fallback: szs_orcamento vazio → puxa do Nekt (orcamento_*_lovable.ads_venda_spot)
+    if (!orcamentoTotal) {
+      try {
+        const nextMonthDt = new Date(year, month, 1);
+        const nextMonthStart = `${nextMonthDt.getFullYear()}-${String(nextMonthDt.getMonth() + 1).padStart(2, "0")}-01`;
+        const budget = await getNektBudget("SZS", "ads_venda_spot", startDate, nextMonthStart);
+        orcamentoTotal = Math.round(budget.orcamento);
+      } catch (e) {
+        console.warn("[szs/orcamento] Nekt fallback falhou:", e);
+      }
+    }
 
     const adMaxSpend = new Map<string, { spend: number; leads: number; squadId: number; emp: string }>();
     for (const row of metaAllRes.data || []) {
