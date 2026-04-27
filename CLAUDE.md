@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Dashboard de acompanhamento de vendas por squads para a Seazone (Pipeline SZI). Centraliza dados do Pipedrive, Meta Ads e Google Calendar em uma interface unificada.
 
-- **Deploy:** Vercel (saleszone.vercel.app) — auto-deploy via push em `main`
-- **GitHub:** `seazone-socios/saleszone`
-- **Supabase:** projeto `iobxudcyihqfdwiggohz` (plano Pro) — auth, user_profiles, nekt_meta26_metas
+- **Deploy:** Coolify self-hosted em `https://deploy.seazone.dev` — auto-deploy via push em `main` para `saleszone-prod` (`https://saleszone-prod.seazone.dev`). Staging: `saleszone-staging` (branch `staging`). Vercel (saleszone.vercel.app) está com auto-deploy desconectado desde abr/2026.
+- **GitHub:** `seazone-tech/saleszone` (renomeado de `seazone-socios/saleszone` — origin antigo ainda funciona via redirect)
+- **Supabase ATUAL:** `gams` (`gamswizeexihaymfweeq`) — único projeto pra staging+prod, contém todas as tabelas `squad_*`, `szs_*`, `mktp_*`, `decor_*`, edge functions e pg_cron. Auth OAuth Google, vault, 60+ cron jobs.
+- **Supabase legado (NÃO usar):** `iob` (`iobxudcyihqfdwiggohz`) é só pra `losts` (Monitor de Atendimento jp-rambo, separado); `cnc` (`cncistmevwwghtaiyaao`) era prod antigo; `qsqa` era staging antigo.
 
 ## Stack
 - **Framework:** Next.js 16 (App Router, Turbopack), React 19, TypeScript 5
@@ -96,10 +97,41 @@ Total: 3 closers. Squads hardcoded em `src/lib/constants.ts`. Metas WON dividida
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key (server-side only)
 - `GITHUB_TOKEN` — Token GitHub com acesso ao repo `seazone-socios/saleszone`
 
-## Vercel
+## Vercel (legado)
 - `maxDuration = 300` no sync route (sem isso, default é 10s e sync timeout)
-- Deploy: conta do Fernando (`fernandopereira-ship-it`). Colaboradores precisam ser adicionados pelo owner
-- Auto-deploy via push para branch `main` no GitHub
+- Deploy original: conta do Fernando (`fernandopereira-ship-it`). Auto-deploy GitHub→Vercel está **desconectado** desde abr/2026
+- Prod ativo migrou pra Coolify (saleszone-prod). Vercel mantido só pra histórico
+
+## Coolify (deploy ativo)
+- Instância: `https://deploy.seazone.dev`
+- Apps: `saleszone-prod` (branch `main`, domínio `saleszone-prod.seazone.dev`) e `saleszone-staging` (branch `staging`, domínio `saleszone-staging.seazone.dev`)
+- Auto-deploy via webhook GitHub. Trigger manual via API: `POST /api/v1/deploy?uuid=<app_uuid>` com Bearer token
+- Env vars apontam pra `gams` em prod e staging (sem isolamento de schema)
+
+## Branch Protection / Workflow de PRs
+- **Branch `main` protegida** (`enforce_admins: true` — bypass off, ninguém burla)
+- **Aprovação obrigatória de CODEOWNER** (`@luizlopes-cloud`) antes de qualquer merge
+- **Status check obrigatório:** `Alfred` (review IA automático)
+- **Linear history:** ON (sem merge commits — squash apenas)
+- **Force push e delete:** OFF
+- **Stale reviews:** descartados ao receber novo push (precisa re-aprovar)
+- **CODEOWNERS:** `.github/CODEOWNERS` aponta `* @luizlopes-cloud`
+- **Permissões repo:** `luizlopes-cloud` = write (aprovar+mergear); `businessoperations-seazone` = admin
+- **Workflow padrão:**
+  1. Dev/agente abre PR contra `main`
+  2. Alfred roda review automático (≤2min)
+  3. Luiz revisa e aprova com `luizlopes-cloud` (manual via UI ou via `gh pr review --approve`)
+  4. Squash merge + delete branch
+  5. Coolify auto-deploya prod
+- **Workflow Claude Code (assistente):**
+  1. Claude abre PR
+  2. Quando autorizado por "aprova", Claude troca pra `luizlopes-cloud`: `gh auth switch -u luizlopes-cloud`
+  3. Approve + merge: `gh pr review <X> --approve` + `gh pr merge <X> --squash --delete-branch`
+  4. Volta pro user padrão: `gh auth switch -u businessoperations-seazone`
+- **Em emergência:** Luiz pode mergear direto via UI ou CLI sob qualquer um dos 2 users — `--admin` flag NÃO funciona (bypass off)
+
+## Notificações de PR
+- Recomendado: Slack via GitHub app — em canal dedicado (`#saleszone-prs` ou similar) digite `/github subscribe seazone-tech/saleszone pulls`
 
 ## Admin — Gestão de Usuários
 - **Rota:** `/admin` (restrito a role `diretor`)
