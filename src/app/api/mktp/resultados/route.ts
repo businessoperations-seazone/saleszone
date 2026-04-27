@@ -90,6 +90,9 @@ export const dynamic = "force-dynamic";
    abril, divergindo do Pipedrive UI que exibe em BRT. ── */
 function toDate(ts: string | null | undefined): string | null {
   if (!ts) return null;
+  // DATE puro (YYYY-MM-DD sem hora) → retorna direto. Aplicar BRT em DATE
+  // joga colunas como qualificacao_date/reuniao_date 1 dia para trás (UTC midnight - 3h).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return ts;
   const d = new Date(ts);
   if (isNaN(d.getTime())) return ts.substring(0, 10);
   const brt = new Date(d.getTime() - 3 * 60 * 60 * 1000);
