@@ -15,7 +15,7 @@ Para regras de tabelas, Edge Functions e armadilhas Pipedrive/Meta/Supabase: ver
 
 1. Ler `nekt_meta26_metas` do mês atual (campo `data` formato DD/MM/YYYY, ex: "01/03/2026")
 2. `meta_won_total = won_szi_meta_pago + won_szi_meta_direto`
-3. `meta_won_squad = (meta_won_total / 5) * closers_do_squad`
+3. `meta_won_squad = (meta_won_total / V_COLS.length) * closers_do_squad`
 4. `meta_to_date = (dia_atual / dias_no_mes) * meta_won_squad`
 5. Metas MQL/SQL/OPP = ratios 90d (de `squad_ratios`) × meta WON do squad
 
@@ -95,7 +95,7 @@ Componente reutilizável `MediaFilterToggle` em `ui.tsx`. Type `MediaFilter` em 
   4. **Leadtime por etapa:** tempo médio (média, não mediana — mais conservador) da etapa até WON. Usa deals que FECHARAM nos últimos 90d (`won_time >= 90d`, query separada). Fórmula SZI: `ciclo_total × (14 - stage_order) / 13`. SZS: `ciclo_total × (12 - stage_order) / 11`
   5. **Forecast = Já Ganhos + Pipeline**
 - **Ranges:** pessimista (pipeline ×0.7), esperado (×1.0), otimista (×1.3)
-- **Metas SZI:** `nekt_meta26_metas.won_szi_meta_pago + won_szi_meta_direto` via service role key. Divide por 5 closers e distribui por squad
+- **Metas SZI:** `nekt_meta26_metas.won_szi_meta_pago + won_szi_meta_direto` via service role key. Divide por `V_COLS.length` closers e distribui por squad
 - **Metas SZS:** `nekt_meta26_metas` campos por canal (`won_szs_meta_pago`, `won_szs_meta_parceiro`, `won_szs_meta_exp`, `won_szs_meta_spot`, `won_szs_meta_direto`)
 - **CUIDADO queries de leadtime vs conversão:** conversão usa `add_time >= 90d` (deals criados no período). Leadtime usa `won_time >= 90d` (deals que fecharam no período, independente de quando foram criados). Misturar os filtros gera leadtimes artificialmente curtos
 - **CUIDADO datas UTC:** `new Date("2026-03-01")` em BRT (UTC-3) vira 28/fev 21h. Usar `new Date("2026-03-01T12:00:00")` para exibição de mês

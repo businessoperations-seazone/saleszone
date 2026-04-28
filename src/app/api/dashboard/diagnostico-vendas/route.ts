@@ -103,8 +103,9 @@ export async function GET() {
     // Sort by leadtime DESC
     deals.sort((a, b) => b.leadtime_hours - a.leadtime_hours);
 
-    // Group by closer
+    // Group by closer — initialize all V_COLS so closers with 0 open deals still appear
     const byCloser = new Map<string, DiagVendasDealRow[]>();
+    for (const name of V_COLS) byCloser.set(name, []);
     for (const deal of deals) {
       if (!byCloser.has(deal.owner_name)) byCloser.set(deal.owner_name, []);
       byCloser.get(deal.owner_name)!.push(deal);

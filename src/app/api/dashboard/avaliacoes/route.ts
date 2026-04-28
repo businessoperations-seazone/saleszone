@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { V_COLS, SQUADS } from "@/lib/constants";
+import { V_COLS, SQUADS, SQUAD_V_MAP } from "@/lib/constants";
 import type { AvaliacaoReuniao, AvaliacaoCloserSummary, AvaliacoesData, AvaliacaoJSON } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +13,8 @@ function norm(s: string): string {
 function getSquadId(closerName: string): number {
   const n = norm(closerName);
   for (const sq of SQUADS) {
-    // Check V_COLS mapping
-    const closerNames = V_COLS.filter((_, i) => {
-      const map: Record<number, number[]> = { 1: [0], 2: [1, 2], 3: [3, 4] };
-      return (map[sq.id] || []).includes(i);
-    });
+    const indices = SQUAD_V_MAP[sq.id] || [];
+    const closerNames = indices.map((i) => V_COLS[i]).filter(Boolean);
     if (closerNames.some((c) => norm(c) === n || n.includes(norm(c)) || norm(c).includes(n))) {
       return sq.id;
     }

@@ -457,7 +457,10 @@ export function AcompanhamentoView({ data, activeTab, setActiveTab, loading, las
                     const m = data.metaInfo!;
                     const lines: string[] = [];
                     lines.push(`Meta WON total: ${m.wonMetaTotal} (pago + direto)`);
-                    lines.push(`WON por closer: ${m.wonPerCloser.toFixed(1)} (${m.wonMetaTotal} / 5 closers)`);
+                    {
+                      const totalClosers = m.squads.reduce((sum, sq) => sum + sq.closers, 0);
+                      lines.push(`WON por closer: ${m.wonPerCloser.toFixed(1)} (${m.wonMetaTotal} / ${totalClosers} closer${totalClosers === 1 ? "" : "s"})`);
+                    }
                     lines.push(`Proporção: dia ${m.day} / ${m.totalDaysInMonth} = ${(m.day / m.totalDaysInMonth * 100).toFixed(1)}%`);
                     lines.push(``);
                     lines.push(`Ratios 90d por squad (${activeTab.toUpperCase()}):`);

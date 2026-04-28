@@ -73,7 +73,7 @@ Orcamento/Planejamento NAO tem toggle. Resultados/Acompanhamento buscam com `"al
 - Color coding: verde <80% media, vermelho >120%. Dias: verde <30d, amarelo 30-89d, vermelho >=90d
 
 ## Diagnostico Vendas
-- Deals abertos de `squad_deals`, filtrados pelos 5 closers (V_COLS)
+- Deals abertos de `squad_deals`, filtrados pelos closers em V_COLS
 - Leadtime = horas desde `last_activity_date` (ou `add_time`). Precisao ~1 dia
 - Thresholds: CRITICO >= 24h, ALERTA >= 12h, OK < 12h
 - Deal links: `https://seazone-fd92b9.pipedrive.com/deal/{id}`

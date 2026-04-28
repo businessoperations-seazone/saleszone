@@ -1,23 +1,25 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import type { OciosidadeCloser, OciosidadeDay, OciosidadeData, OciosidadeDate } from "@/lib/types";
-import { MONTHS_PT, WEEKDAYS_PT } from "@/lib/constants";
+import { MONTHS_PT, WEEKDAYS_PT, V_COLS, SQUAD_V_MAP } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
 const JORNADA_MIN = 480; // 8h úteis
 
-// Squad mapping by closer name
-const CLOSER_SQUADS: Record<string, number> = {
-  priscila: 1,
-  filipe: 2,
-  luana: 3,
-};
+function norm(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
 
 function getSquadId(name: string): number {
-  const lower = name.toLowerCase();
-  for (const [key, id] of Object.entries(CLOSER_SQUADS)) {
-    if (lower.includes(key)) return id;
+  const n = norm(name);
+  for (const [sqId, indices] of Object.entries(SQUAD_V_MAP)) {
+    for (const idx of indices) {
+      const closer = V_COLS[idx];
+      if (!closer) continue;
+      const cn = norm(closer);
+      if (n === cn || n.includes(cn) || cn.includes(n)) return Number(sqId);
+    }
   }
   return 0;
 }

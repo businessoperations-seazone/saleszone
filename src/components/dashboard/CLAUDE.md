@@ -148,7 +148,7 @@ Envia: `["dashboard-light", "meta-ads", "deals-light", "calendar", "presales", "
 
 ## Base-Line (Cohort Analysis)
 
-- **Data de contratação** hardcoded em `CLOSER_HIRE_DATES` na API route. Valores: Laura=2025-09, Camila=2025-07, Filipe=auto (primeiro deal), Luana=2024-03, Priscila=2025-02. Para alterar, editar o mapa
+- **Data de contratação** hardcoded em `CLOSER_HIRE_DATES` na API route. Valores atuais: Luana=2024-03, Filipe=auto (primeiro deal), Hellen=auto. Para alterar, editar o mapa
 - **monthZero** = data de contratação. Todos os offsets (M0, M1, ...) partem dessa data
 - **Toggle 3 modos:** Conversão % (OPP→WON por mês), Volume OPP (acumulado), Volume WON (acumulado)
 - **Tabela cohort:** heatmap com color coding. Coluna "vs Mediana" compara total do closer contra mediana do grupo
@@ -172,4 +172,4 @@ Envia: `["dashboard-light", "meta-ads", "deals-light", "calendar", "presales", "
 - **Exclusões:** reuniões canceladas, transcrições corrompidas (nota 0 = ASR falhou)
 - **Filtro:** 7d / 14d / 30d / 60d / 90d
 - **Tipos de invalidez:** sem gravação, transcrição curta (<500 chars), corrompida, alucinação detectada
-- **CUIDADO ASR em idioma errado:** Fireflies às vezes transcreve PT como EN → gibberish. Closers mais afetados: Filipe, Priscila, Luana
+- **CUIDADO ASR em idioma errado:** Fireflies às vezes transcreve PT como EN → gibberish
