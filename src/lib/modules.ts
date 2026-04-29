@@ -134,13 +134,17 @@ const DECOR_CONFIG: ModuleConfig = {
 };
 
 // --- SZS (Serviços) — 3 squads by canal ---
+// Regra de roteamento em src/lib/szs-utils.ts (getSquadIdFromDeal / getSquadIdFromCanalGroup).
+// Squad 1 = Marketing pago (canal=Marketing OU canal_de_origem=Marketing) AND rd_source contém "Pag"
+// Squad 2 = Indicações (Franquia, Corretor, Outros Parceiros)
+// Squad 3 = fallback (Expansão, Mônica, Spots, Marketing orgânico, NULL)
 
 const SZS_SQUADS: readonly SquadDef[] = [
   {
     id: 1,
-    name: "Marketing",
-    marketing: "Raquel",
-    preVenda: "Joyce",
+    name: "Marketing MP",
+    marketing: "Mari",
+    preVenda: "Raquel",
     venda: "Gabi Lemos",
     canal_group: "Marketing",
     empreendimentos: [],
@@ -148,19 +152,19 @@ const SZS_SQUADS: readonly SquadDef[] = [
   {
     id: 2,
     name: "Parceiros",
-    marketing: "Raynara",
-    preVenda: "Raynara Lopes",
-    venda: "Gabriela Branco",
+    marketing: "Débora",
+    preVenda: "Raynara",
+    venda: "Gabi Branco",
     canal_group: "Parceiros",
     empreendimentos: [],
   },
   {
     id: 3,
-    name: "Expansão",
-    marketing: "Larissa",
-    preVenda: "Larissa Marques",
-    venda: "Giovanna Zanchetta",
-    canal_group: "Expansão",
+    name: "Outros",
+    marketing: "JP",
+    preVenda: "Joyce",
+    venda: "Giovanna Zanchietta",
+    canal_group: "Outros",
     empreendimentos: [],
   },
 ] as const;
@@ -172,8 +176,8 @@ const SZS_CONFIG: ModuleConfig = {
   pipelineId: 14,
   metaAdsAccountId: "act_721191188358261",
   squads: SZS_SQUADS,
-  closers: ["Gabi Lemos", "Gabriela Branco", "Giovanna Zanchetta"],
-  presellers: ["Raquel", "Joyce", "Raynara Lopes", "Larissa Marques"],
+  closers: ["Gabi Lemos", "Gabi Branco", "Giovanna Zanchietta"],
+  presellers: ["Raquel", "Raynara", "Joyce"],
   squadCloserMap: { 1: [0], 2: [1], 3: [2] },
   tablePrefix: "szs",
   apiBase: "/api/szs",

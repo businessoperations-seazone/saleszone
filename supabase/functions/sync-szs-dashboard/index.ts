@@ -91,7 +91,9 @@ function parseCSVLine(line: string): string[] {
 const PIPELINE_ID = 14;
 
 
-// Canal group mapping: maps Nekt canal NAME to display group
+// Canal group mapping: maps Nekt canal NAME to display group.
+// Cada canal mantém nome próprio (não colapsamos mais em "Outros") — exceção:
+// indicações de franquia/corretor/parceiros viram suas siglas, e variações de Spot/colaborador-spot viram "Spots".
 const CANAL_GROUPS: Record<string, string> = {
   "Marketing": "Marketing",
   "Indicação de Corretor": "Ind. Corretor",
@@ -103,18 +105,18 @@ const CANAL_GROUPS: Record<string, string> = {
   "Colaborador Seazone (para compra de Spot)": "Spots",
   "Colaborador Seazone (para Compra De Spot)": "Spots",
   "Mônica": "Mônica",
-  "Cliente SZN": "Outros",
-  "Indicação de Clientes": "Outros",
-  "Indicação de Colaborador": "Outros",
-  "Prospecção Ativa": "Outros",
-  "Prospecção ativa - IA": "Outros",
-  "Indicação de Embaixador": "Outros",
-  "Indicação de Hóspede": "Outros",
-  "Portais de imóveis": "Outros",
-  "Marketing POC": "Outros",
-  "Eventos": "Outros",
+  "Cliente SZN": "Cliente SZN",
+  "Indicação de Clientes": "Ind. Clientes",
+  "Indicação de Colaborador": "Ind. Colaborador",
+  "Prospecção Ativa": "Prospecção Ativa",
+  "Prospecção ativa - IA": "Prospecção Ativa",
+  "Indicação de Embaixador": "Ind. Embaixador",
+  "Indicação de Hóspede": "Ind. Hóspede",
+  "Portais de imóveis": "Portais de imóveis",
+  "Marketing POC": "Marketing POC",
+  "Eventos": "Eventos",
 };
-// Any canal not in this map -> "Outros"
+// Any canal not in this map -> "Outros" (catch-all for canais novos não mapeados)
 
 // SZS team: single squad with 5 closers
 // Note: empreendimentos list is empty — SZS uses dynamic cities from Nekt, not a fixed list
@@ -159,6 +161,12 @@ function getCanalGroup(deal: NektDeal): string {
   return CANAL_GROUPS[canal] || "Outros";
 }
 
+// rd_source contendo "Pag" indica tráfego pago — usado pra classificar Marketing pago vs orgânico
+function getIsPaid(deal: NektDeal): boolean {
+  const src = String(deal.rd_source || "").toLowerCase();
+  return src.includes("pag");
+}
+
 function getCidade(deal: NektDeal): string {
   const cidade = deal.cidade_onde_fica_o_imovel;
   if (!cidade || cidade === "-") return "Sem cidade";
@@ -190,6 +198,7 @@ function countDeals(
     if (deal.motivo_da_perda === "Duplicado/Erro") continue;
     mkt++;
     const canalGroup = getCanalGroup(deal);
+    const isPaid = getIsPaid(deal);
     const emp = getCidade(deal);
     const bairro = getBairro(deal);
     if (!emp) continue;
@@ -198,7 +207,7 @@ function countDeals(
       if (!dateStr) continue;
       const day = dateStr.substring(0, 10);
       if (day < startDate || day > endDate) continue;
-      const key = `${day}|${canalGroup}|${emp}|${bairro}`;
+      const key = `${day}|${canalGroup}|${emp}|${bairro}|${isPaid ? "1" : "0"}`;
       countsPerTab[tab].set(key, (countsPerTab[tab].get(key) || 0) + 1);
     }
   }
@@ -212,8 +221,8 @@ async function writeDailyCounts(svcKey: string, countsPerTab: Record<Tab, Map<st
     const final = countsPerTab[tab];
 
     const rows = Array.from(final.entries()).map(([key, count]) => {
-      const [date, canal_group, empreendimento, bairro] = key.split("|");
-      return { date, tab, canal_group, empreendimento, bairro, count, source, synced_at: new Date().toISOString() };
+      const [date, canal_group, empreendimento, bairro, isPaidFlag] = key.split("|");
+      return { date, tab, canal_group, empreendimento, bairro, is_paid: isPaidFlag === "1", count, source, synced_at: new Date().toISOString() };
     });
 
     // Delete only rows from THIS source (idempotent)
@@ -243,15 +252,15 @@ function countDealsByStage(
   const today = new Date().toISOString().substring(0, 10);
   for (const deal of deals) {
     const canalGroup = getCanalGroup(deal);
+    const isPaid = getIsPaid(deal);
     const emp = getCidade(deal);
     const bairro = getBairro(deal);
     if (!emp) continue;
     const stageId = parseInt(deal.stage || "0");
+    const key = `${today}|${canalGroup}|${emp}|${bairro}|${isPaid ? "1" : "0"}`;
     if (stageId === STAGE_RESERVA) {
-      const key = `${today}|${canalGroup}|${emp}|${bairro}`;
       stageCounts.reserva.set(key, (stageCounts.reserva.get(key) || 0) + 1);
     } else if (stageId === STAGE_CONTRATO) {
-      const key = `${today}|${canalGroup}|${emp}|${bairro}`;
       stageCounts.contrato.set(key, (stageCounts.contrato.get(key) || 0) + 1);
     }
   }
@@ -264,8 +273,8 @@ async function writeStageCounts(svcKey: string, stageCounts: Record<"reserva" | 
     const del = await restDelete(svcKey, "szs_daily_counts", [["tab", `eq.${tab}`]]);
     if (del.error) console.error(`  Delete error ${tab}:`, del.error);
     const rows = Array.from(stageCounts[tab].entries()).map(([key, count]) => {
-      const [date, canal_group, empreendimento, bairro] = key.split("|");
-      return { date, tab, canal_group, empreendimento, bairro, count, synced_at: new Date().toISOString() };
+      const [date, canal_group, empreendimento, bairro, isPaidFlag] = key.split("|");
+      return { date, tab, canal_group, empreendimento, bairro, is_paid: isPaidFlag === "1", count, synced_at: new Date().toISOString() };
     });
     if (rows.length > 0) {
       const ins = await restInsert(svcKey, "szs_daily_counts", rows);
@@ -276,9 +285,21 @@ async function writeStageCounts(svcKey: string, stageCounts: Record<"reserva" | 
 }
 
 // ---- Nekt SQL column list for deals ----
-const NEKT_DEAL_COLUMNS = `id, pipeline_id, status, stage, canal, empreendimento,
-    cidade_onde_fica_o_imovel, bairro_do_imovel, deal_created, won_time, lost_time,
-    data_de_qualificacao, data_da_reuniao, owner_id, deal_owner_name, motivo_da_perda, title`;
+// Nota: várias colunas foram renomeadas pra português no nekt_silver.pipedrive_deals_readable.
+// Aliasamos pras chaves esperadas pelo restante do código (deal.stage, deal.deal_created, etc).
+const NEKT_DEAL_COLUMNS = `id, pipeline_id, status,
+    etapa AS stage,
+    canal, canal_de_origem, rd_source,
+    empreendimento,
+    cidade_onde_fica_o_imovel, bairro_do_imovel,
+    negocio_criado_em AS deal_created,
+    ganho_em AS won_time,
+    data_de_perda AS lost_time,
+    data_de_qualificacao, data_da_reuniao,
+    owner_id,
+    proprietario AS deal_owner_name,
+    motivo_da_perda,
+    titulo AS title`;
 
 // ---- Mode: daily-open (Nekt query, replaces counts) ----
 async function syncDailyOpen(nektApiKey: string, supabase: any, svcKey: string) {
@@ -323,8 +344,8 @@ async function syncDailyByStatus(nektApiKey: string, supabase: any, svcKey: stri
   console.log(`syncDailyByStatus: ${status} from Nekt, cutoff=${cutoffStr}`);
 
   const dateFilter = status === "won"
-    ? `AND won_time >= TIMESTAMP '${cutoffStr}'`
-    : `AND lost_time >= TIMESTAMP '${cutoffStr}'`;
+    ? `AND ganho_em >= TIMESTAMP '${cutoffStr}'`
+    : `AND data_de_perda >= TIMESTAMP '${cutoffStr}'`;
 
   const sql = `
     SELECT ${NEKT_DEAL_COLUMNS}
@@ -349,7 +370,7 @@ async function syncAlignment(nektApiKey: string, svcKey: string) {
 
   const sql = `
     SELECT id, pipeline_id, canal, cidade_do_imovel, bairro_do_imovel,
-           owner_id, deal_owner_name, title
+           owner_id, proprietario AS deal_owner_name, titulo AS title
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'open'
   `;
@@ -579,7 +600,7 @@ async function backfillOpenWon(nektApiKey: string, supabase: any) {
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'won'
-      AND deal_created >= TIMESTAMP '${startDate}'
+      AND negocio_criado_em >= TIMESTAMP '${startDate}'
   `;
   const wonDeals = await queryNekt(wonSql, nektApiKey);
   let totalWon = 0;
@@ -618,7 +639,7 @@ async function backfillLostWithFlow(nektApiKey: string, supabase: any, _startFro
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'lost'
-      AND deal_created >= TIMESTAMP '${startDate}'
+      AND negocio_criado_em >= TIMESTAMP '${startDate}'
   `;
   const deals = await queryNekt(sql, nektApiKey);
 
@@ -667,7 +688,7 @@ async function syncMonthlyRollup(nektApiKey: string, supabase: any) {
     SELECT ${NEKT_DEAL_COLUMNS}
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID}
-      AND deal_created >= TIMESTAMP '${startDate}'
+      AND negocio_criado_em >= TIMESTAMP '${startDate}'
   `;
   const deals = await queryNekt(sql, nektApiKey);
   let totalDeals = 0;
@@ -723,7 +744,7 @@ async function syncSnapshot(nektApiKey: string, supabase: any) {
   console.log(`syncSnapshot: querying Nekt for open deals snapshot...`);
 
   const sql = `
-    SELECT id, pipeline_id, status, stage, canal, motivo_da_perda
+    SELECT id, pipeline_id, status, etapa AS stage, canal, motivo_da_perda
     FROM nekt_silver.pipedrive_deals_readable
     WHERE pipeline_id = ${PIPELINE_ID} AND status = 'open'
   `;

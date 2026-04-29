@@ -40,13 +40,13 @@ export async function GET(req: NextRequest) {
               : null; // null = all cities
 
     // Fetch from szs_daily_counts (paginated)
-    const allRows: Array<{ date: string; empreendimento: string; canal_group: string; count: number }> = [];
+    const allRows: Array<{ date: string; empreendimento: string; canal_group: string; is_paid: boolean; count: number }> = [];
     let offset = 0;
     const PAGE = 1000;
     while (true) {
       const { data, error } = await supabase
         .from("szs_daily_counts")
-        .select("date, empreendimento, canal_group, count")
+        .select("date, empreendimento, canal_group, is_paid, count")
         .eq("tab", tab)
         .gte("date", startDate)
         .lte("date", endDate)
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
       if (idx === undefined) continue;
       if (cityFilter && getCidadeGroup(row.empreendimento) !== cityFilter) continue;
       const canalGroup = row.canal_group || "Outros";
-      const squadId = getSquadIdFromCanalGroup(canalGroup);
+      const squadId = getSquadIdFromCanalGroup(canalGroup, row.is_paid);
       const gKey = `${squadId}|${canalGroup}`;
       if (!squadCidadeCounts.has(gKey)) squadCidadeCounts.set(gKey, new Array(NUM_DAYS).fill(0));
       squadCidadeCounts.get(gKey)![idx] += row.count;
@@ -132,12 +132,12 @@ export async function GET(req: NextRequest) {
       start90.setDate(start90.getDate() - 90);
       const startDate90 = start90.toISOString().substring(0, 10);
 
-      const counts90: Array<{ tab: string; canal_group: string; count: number }> = [];
+      const counts90: Array<{ tab: string; canal_group: string; is_paid: boolean; count: number }> = [];
       let o90 = 0;
       while (true) {
         const { data, error } = await supabase
           .from("szs_daily_counts")
-          .select("tab, canal_group, count")
+          .select("tab, canal_group, is_paid, count")
           .gte("date", startDate90)
           .lte("date", endDate)
           .range(o90, o90 + PAGE - 1);
@@ -151,7 +151,7 @@ export async function GET(req: NextRequest) {
       // Build 90d counts per squad
       const squadCounts90 = new Map<number, Record<string, number>>();
       for (const r of counts90) {
-        const sqId = getSquadIdFromCanalGroup(r.canal_group || "Outros");
+        const sqId = getSquadIdFromCanalGroup(r.canal_group || "Outros", r.is_paid);
         if (!squadCounts90.has(sqId)) squadCounts90.set(sqId, { mql: 0, sql: 0, opp: 0, won: 0 });
         const c = squadCounts90.get(sqId)!;
         if (r.tab in c) c[r.tab] += r.count || 0;

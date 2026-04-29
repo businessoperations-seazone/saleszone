@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getModuleConfig } from "@/lib/modules";
-import { getSquadIdFromCanalId, getCanalGroupFromId } from "@/lib/szs-utils";
+import { getSquadIdFromDeal, getCanalGroupFromId } from "@/lib/szs-utils";
 
 const mc = getModuleConfig("szs");
 
@@ -40,26 +40,28 @@ export async function GET() {
 
     if (error) throw new Error(`Supabase error: ${error.message}`);
 
-    // Fetch canal for each deal from szs_deals to determine squad assignment
+    // Fetch canal/canal_de_origem/rd_source for each deal from szs_deals to determine squad assignment
     const dealIds = (deals || []).map((d) => d.deal_id);
-    const canalMap = new Map<number, string>();
-    // Paginate szs_deals lookup (may exceed 1000)
+    type DealClassFields = { canal: string; canal_de_origem: string | null; rd_source: string | null };
+    const fieldsMap = new Map<number, DealClassFields>();
     const PAGE = 1000;
     for (let i = 0; i < dealIds.length; i += PAGE) {
       const batch = dealIds.slice(i, i + PAGE);
-      const { data: canalRows } = await supabase
+      const { data: rows } = await supabase
         .from("szs_deals")
-        .select("deal_id, canal")
+        .select("deal_id, canal, canal_de_origem, rd_source")
         .in("deal_id", batch);
-      for (const r of canalRows || []) {
-        canalMap.set(r.deal_id, r.canal || "");
+      for (const r of rows || []) {
+        fieldsMap.set(r.deal_id, {
+          canal: r.canal || "",
+          canal_de_origem: r.canal_de_origem ?? null,
+          rd_source: r.rd_source ?? null,
+        });
       }
     }
 
-    // Build squad info per canal: canal → { correctPV, correctVIndices, squadId }
-    // SZS uses canal-based squads, not empreendimento-based
-    function getSquadInfo(canal: string) {
-      const squadId = getSquadIdFromCanalId(canal);
+    function getSquadInfo(f: DealClassFields) {
+      const squadId = getSquadIdFromDeal(f.canal, f.canal_de_origem, f.rd_source);
       const sq = mc.squads.find((s) => s.id === squadId);
       if (!sq) return null;
       const vIndices = mc.squadCloserMap[sq.id] || [];
@@ -70,8 +72,10 @@ export async function GET() {
     const byPerson = new Map<string, { role: "pv" | "v"; deals: MisalignedDeal[] }>();
 
     for (const deal of deals || []) {
-      const canal = canalMap.get(deal.deal_id) || "";
-      const info = getSquadInfo(canal);
+      const f = fieldsMap.get(deal.deal_id);
+      if (!f) continue;
+      const canal = f.canal;
+      const info = getSquadInfo(f);
       if (!info) continue;
 
       // Check which PV/V column this owner matches

@@ -453,6 +453,7 @@ function dealToRow(deal: any, maxStageOrder: number | null, flowFetched: boolean
     lost_time: deal.lost_time || null,
     update_time: deal.update_time || null,
     canal: String(deal[FIELD_CANAL] || ""),
+    canal_de_origem: deal.channel ? String(deal.channel) : null,
     empreendimento_id: String(deal[FIELD_CIDADE] || ""),
     empreendimento: getCidade(deal),
     qualificacao_date: deal[FIELD_QUALIFICACAO] || null,

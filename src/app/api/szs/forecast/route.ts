@@ -2,10 +2,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import type { ForecastData, ForecastStageSnapshot, ForecastSquadRow, ForecastCloserRow } from "@/lib/types";
+import type { ForecastData, ForecastStageSnapshot, ForecastStageBreakdown, ForecastSquadRow, ForecastCloserRow } from "@/lib/types";
 import { paginate } from "@/lib/paginate";
 import { getModuleConfig } from "@/lib/modules";
-import { getSquadIdFromCanalId, getSquadName, getCanalGroupFromId, SZS_METAS_WON_BY_SQUAD } from "@/lib/szs-utils";
+import { getSquadIdFromDeal, getSquadName, getCanalGroupFromId, SZS_METAS_WON_BY_SQUAD } from "@/lib/szs-utils";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +46,7 @@ export async function GET() {
       paginate((o, ps) =>
         supabase
           .from("szs_deals")
-          .select("deal_id, stage_order, owner_name, canal")
+          .select("deal_id, stage_order, owner_name, canal, canal_de_origem, rd_source")
           .eq("status", "open")
           .range(o, o + ps - 1),
       ),
@@ -69,7 +69,7 @@ export async function GET() {
       paginate((o, ps) =>
         supabase
           .from("szs_deals")
-          .select("deal_id, owner_name, canal")
+          .select("deal_id, owner_name, canal, canal_de_origem, rd_source")
           .eq("status", "won")
           .gte("won_time", mesInicio)
           .lt("won_time", mesFim)
@@ -137,15 +137,27 @@ export async function GET() {
 
     // --- Deals abertos por etapa ---
     const openByStage: Record<number, number> = {};
+    const openByStageCanal: Record<number, Record<string, number>> = {};
     for (const d of openDeals) {
       const so = d.stage_order || 1;
       openByStage[so] = (openByStage[so] || 0) + 1;
+      const canalName = getCanalGroupFromId(String(d.canal));
+      if (!openByStageCanal[so]) openByStageCanal[so] = {};
+      openByStageCanal[so][canalName] = (openByStageCanal[so][canalName] || 0) + 1;
     }
 
     // --- Stage snapshots ---
     const stages: ForecastStageSnapshot[] = ALL_STAGES.map((so) => {
       const deals = openByStage[so] || 0;
       const rate = convRate[so] || 0;
+      const canalCounts = openByStageCanal[so] || {};
+      const breakdown: ForecastStageBreakdown[] = Object.entries(canalCounts)
+        .map(([name, count]) => ({
+          name,
+          openDeals: count,
+          expectedWon: Math.round(count * rate * 10) / 10,
+        }))
+        .sort((a, b) => b.openDeals - a.openDeals);
       return {
         stage: STAGE_NAMES[so] || `Stage ${so}`,
         stageOrder: so,
@@ -153,15 +165,28 @@ export async function GET() {
         convRate: rate,
         leadtimeDays: leadtimeByStage[so] || 0,
         expectedWon: Math.round(deals * rate * 10) / 10,
+        breakdown,
       };
     });
 
-    const totalPipeline = stages.reduce((s, st) => s + st.expectedWon, 0);
+    // --- Open / Won deals: Marketing-only subsets para cards/ranges (não para squad/closer table) ---
+    const isMarketing = (canal: unknown) => canal === "Marketing" || canal === "12";
+    const openDealsMarketing = openDeals.filter((d) => isMarketing(d.canal));
+    const wonThisMonthMarketing = wonThisMonth.filter((d) => isMarketing(d.canal));
 
-    // --- WON do mês por squad ---
+    // Pipeline esperado MARKETING (cards) — apenas canal Marketing × convRate
+    let totalPipelineMarketing = 0;
+    for (const d of openDealsMarketing) {
+      const so = d.stage_order || 1;
+      totalPipelineMarketing += convRate[so] || 0;
+    }
+    totalPipelineMarketing = Math.round(totalPipelineMarketing * 10) / 10;
+    const totalWonMarketing = wonThisMonthMarketing.length;
+
+    // --- WON do mês por squad (TODOS os canais — alimenta tabela Forecast por Squad/Closer) ---
     const wonBySquad: Record<number, number> = {};
     for (const d of wonThisMonth) {
-      const sqId = getSquadIdFromCanalId(d.canal);
+      const sqId = getSquadIdFromDeal(d.canal, d.canal_de_origem, d.rd_source);
       wonBySquad[sqId] = (wonBySquad[sqId] || 0) + 1;
     }
     const totalWonActual = wonThisMonth.length;
@@ -172,7 +197,7 @@ export async function GET() {
     const wonByCanal: Record<string, number> = {};
     const pipelineByCanal: Record<string, number> = {};
     for (const d of openDeals) {
-      const sqId = getSquadIdFromCanalId(d.canal);
+      const sqId = getSquadIdFromDeal(d.canal, d.canal_de_origem, d.rd_source);
       const canalKey = `${sqId}|${getCanalGroupFromId(d.canal)}`;
       const so = d.stage_order || 1;
       pipelineBySquad[sqId] = (pipelineBySquad[sqId] || 0) + (convRate[so] || 0);
@@ -181,7 +206,7 @@ export async function GET() {
       openBySquadStage[sqId][so] = (openBySquadStage[sqId][so] || 0) + 1;
     }
     for (const d of wonThisMonth) {
-      const sqId = getSquadIdFromCanalId(d.canal);
+      const sqId = getSquadIdFromDeal(d.canal, d.canal_de_origem, d.rd_source);
       const canalKey = `${sqId}|${getCanalGroupFromId(d.canal)}`;
       wonByCanal[canalKey] = (wonByCanal[canalKey] || 0) + 1;
     }
@@ -273,7 +298,8 @@ export async function GET() {
       });
 
     // --- Grand total ---
-    const grandTotal = totalWonActual + totalPipeline;
+    // Cards/range usam Marketing-only. Squad/Closer table mantém todos os canais (suaTotal pode divergir dos cards — esperado).
+    const grandTotalMarketing = totalWonMarketing + totalPipelineMarketing;
     const grandMeta = Object.values(metaBySquad).reduce((s, v) => s + v, 0);
 
     const result: ForecastData = {
@@ -281,20 +307,21 @@ export async function GET() {
       diasPassados,
       diasRestantes,
       diasNoMes,
-      wonActual: totalWonActual,
-      pipeline: Math.round(totalPipeline * 10) / 10,
+      wonActual: totalWonMarketing,
+      pipeline: Math.round(totalPipelineMarketing * 10) / 10,
       generation: 0,
-      total: Math.round(grandTotal * 10) / 10,
+      total: Math.round(grandTotalMarketing * 10) / 10,
       meta: grandMeta,
-      pctMeta: grandMeta > 0 ? Math.round((grandTotal / grandMeta) * 100) : 0,
+      pctMeta: grandMeta > 0 ? Math.round((grandTotalMarketing / grandMeta) * 100) : 0,
       ranges: {
-        pessimista: Math.round((totalWonActual + totalPipeline * 0.7) * 10) / 10,
-        esperado: Math.round(grandTotal * 10) / 10,
-        otimista: Math.round((totalWonActual + totalPipeline * 1.3) * 10) / 10,
+        pessimista: Math.round((totalWonMarketing + totalPipelineMarketing * 0.7) * 10) / 10,
+        esperado: Math.round(grandTotalMarketing * 10) / 10,
+        otimista: Math.round((totalWonMarketing + totalPipelineMarketing * 1.3) * 10) / 10,
       },
       stages,
       squads: squadsResult,
-      metodologia: `Deals abertos de todos os canais (pipeline SZS), agrupados por squad (3 squads: Marketing, Parceiros, Expansão/Spot/Outros). Taxa de conversão por etapa calculada com base nos últimos 90 dias: de todos os deals que passaram pela etapa X (max_stage_order >= X), qual % virou WON. Forecast = WON já ganhos no mês + Σ(deals abertos por etapa × taxa conversão da etapa). Meta por squad: nekt_meta26_metas (consolidada por squad).`,
+      marketingOpenDeals: openDealsMarketing.length,
+      metodologia: `Cards (Já Ganhos, Pipeline Esperado, Forecast Total, Range): apenas canal Marketing. Pipeline por Etapa: TODOS os canais com breakdown ao clicar. Tabela Forecast por Squad/Closer: TODOS os canais (Marketing/Parceiros/Outros) — pode divergir dos cards. Taxa de conversão por etapa calculada com base nos últimos 90 dias. Meta por squad: nekt_meta26_metas (consolidada por squad). totalWonActual=${totalWonActual} (todos canais).`,
     };
 
     return NextResponse.json(result);

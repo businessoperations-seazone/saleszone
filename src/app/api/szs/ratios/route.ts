@@ -97,12 +97,12 @@ export async function GET(req: NextRequest) {
     ]);
 
     // Paginate szs_daily_counts (>1000 rows possible in 28d window)
-    const countsAll: Array<{ date: string; tab: string; empreendimento: string; canal_group: string; count: number }> = [];
+    const countsAll: Array<{ date: string; tab: string; empreendimento: string; canal_group: string; is_paid: boolean; count: number }> = [];
     let o = 0;
     while (true) {
       const { data, error } = await admin
         .from("szs_daily_counts")
-        .select("date, tab, empreendimento, canal_group, count")
+        .select("date, tab, empreendimento, canal_group, is_paid, count")
         .gte("date", startDate)
         .lte("date", today)
         .range(o, o + 999);
@@ -150,7 +150,7 @@ export async function GET(req: NextRequest) {
       if (cityFilter && getCidadeGroup(row.empreendimento) !== cityFilter) continue;
 
       const canalGroup = row.canal_group || "Outros";
-      const squadId = getSquadIdFromCanalGroup(canalGroup);
+      const squadId = getSquadIdFromCanalGroup(canalGroup, row.is_paid);
       const squad = mc.squads.find(s => s.id === squadId);
       const key = squad?.name || "Outros";
 
@@ -165,12 +165,12 @@ export async function GET(req: NextRequest) {
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 89);
       const ninetyCutoff = ninetyDaysAgo.toISOString().substring(0, 10);
 
-      const ninetyCounts: Array<{ tab: string; canal_group: string; count: number }> = [];
+      const ninetyCounts: Array<{ tab: string; canal_group: string; is_paid: boolean; count: number }> = [];
       let o = 0;
       while (true) {
         const { data, error } = await admin
           .from("szs_daily_counts")
-          .select("tab, canal_group, empreendimento, count")
+          .select("tab, canal_group, is_paid, empreendimento, count")
           .in("tab", ["mql", "sql", "opp", "won"])
           .gte("date", ninetyCutoff)
           .lte("date", today)
@@ -189,7 +189,7 @@ export async function GET(req: NextRequest) {
       const sqTotals = new Map<number, Counts>();
       for (const r of ninetyCounts) {
         if (!["mql", "sql", "opp", "won"].includes(r.tab)) continue;
-        const sqId = getSquadIdFromCanalGroup(r.canal_group || "Outros");
+        const sqId = getSquadIdFromCanalGroup(r.canal_group || "Outros", r.is_paid);
         if (!sqTotals.has(sqId)) sqTotals.set(sqId, emptyCounts());
         const c = sqTotals.get(sqId)!;
         c[r.tab as keyof Counts] += r.count || 0;

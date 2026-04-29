@@ -5,7 +5,7 @@ import { getModuleConfig } from "@/lib/modules";
 import type { AlinhamentoData } from "@/lib/types";
 import { paginate } from "@/lib/paginate";
 import {
-  getSquadIdFromCanalGroup,
+  getSquadIdFromDeal,
   getCanalGroupFromId,
 } from "@/lib/szs-utils";
 
@@ -29,18 +29,26 @@ export async function GET() {
     const deals = await paginate((o, ps) =>
       admin
         .from("szs_deals")
-        .select("empreendimento, canal, owner_name, preseller_name, lost_reason")
+        .select("empreendimento, canal, canal_de_origem, rd_source, owner_name, preseller_name, lost_reason")
         .eq("status", "open")
         .range(o, o + ps - 1)
     );
 
-    // Group deals by canal_group × owner
+    // Group deals by (squad, canal_group) × owner
+    // Marketing pago vai pra Squad 1 e Marketing orgânico vai pra Squad 3,
+    // então o mesmo canal_group ("Marketing") pode aparecer em 2 squads — split via squadId.
     const groupOwner = new Map<string, Map<string, number>>();
+    const groupKeyMeta = new Map<string, { canalGroup: string; squadId: number }>();
     for (const d of deals) {
       if (d.lost_reason === "Duplicado/Erro") continue;
       const canalGroup = getCanalGroupFromId(String(d.canal || ""));
-      if (!groupOwner.has(canalGroup)) groupOwner.set(canalGroup, new Map());
-      const ownerMap = groupOwner.get(canalGroup)!;
+      const sqId = getSquadIdFromDeal(d.canal, d.canal_de_origem, d.rd_source);
+      const key = `${sqId}|${canalGroup}`;
+      if (!groupOwner.has(key)) {
+        groupOwner.set(key, new Map());
+        groupKeyMeta.set(key, { canalGroup, squadId: sqId });
+      }
+      const ownerMap = groupOwner.get(key)!;
       const owner = d.owner_name || "Sem owner";
       ownerMap.set(owner, (ownerMap.get(owner) || 0) + 1);
     }
@@ -50,11 +58,13 @@ export async function GET() {
 
     // Build rows: canals as sub-rows, grouped by squad
     const rows: AlinhamentoData["rows"] = [];
-    const allCanalGroups = Array.from(groupOwner.keys()).sort();
+    const allKeys = Array.from(groupOwner.keys()).sort();
 
-    for (const canalGroup of allCanalGroups) {
-      const owners = groupOwner.get(canalGroup) || new Map<string, number>();
-      const sqId = getSquadIdFromCanalGroup(canalGroup);
+    for (const key of allKeys) {
+      const meta = groupKeyMeta.get(key)!;
+      const canalGroup = meta.canalGroup;
+      const sqId = meta.squadId;
+      const owners = groupOwner.get(key) || new Map<string, number>();
       const sqName = mc.squads.find((s) => s.id === sqId)?.name || `Squad ${sqId}`;
 
       const pv: Record<string, number> = {};

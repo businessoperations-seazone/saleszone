@@ -3,22 +3,60 @@ import { getModuleConfig } from "@/lib/modules";
 const mc = getModuleConfig("szs");
 
 // --- Canal → Squad mapping ---
+//
+// Regra (ver spec 2026-04-28-szs-squads-design.md):
+//   Squad 1 (Marketing MP): (canal=Marketing OR canal_de_origem=Marketing) AND rd_source contém "Pag"
+//   Squad 2 (Parceiros)   : canal IN (Indicação de Franquia, Indicação de Corretor, Indicação de outros Parceiros)
+//   Squad 3 (Outros)      : ELSE — fallback (Expansão, Mônica, Spots, Marketing sem Pag, NULL)
+// Squad 1 vence Squad 2 em conflito (primeiro match).
 
-const CANAL_GROUP_TO_SQUAD: Record<string, number> = {
-  Marketing: 1,
-  "Ind. Franquia": 2, "Ind. Corretor": 2, "Ind. Outros Parceiros": 2,
-  Expansão: 3, Spots: 3, Outros: 3,
-};
+const PARCEIRO_CANAL_GROUPS = new Set(["Ind. Franquia", "Ind. Corretor", "Ind. Outros Parceiros"]);
+// Pipedrive option IDs do campo built-in `channel` (canal_de_origem):
+const CANAL_DE_ORIGEM_MARKETING = "3153";
+// Pipedrive option ID do campo custom `canal`:
+const CANAL_MARKETING = "12";
 
-/** Map canal_group name (from szs_daily_counts) to new squad id */
-export function getSquadIdFromCanalGroup(canalGroup: string): number {
-  return CANAL_GROUP_TO_SQUAD[canalGroup] || 3;
+/**
+ * Classifica um deal SZS num squad com base nos 3 sinais.
+ * Use esta função em rotas que leem szs_deals direto.
+ */
+export function getSquadIdFromDeal(
+  canal: string | null | undefined,
+  canalDeOrigem: string | null | undefined,
+  rdSource: string | null | undefined,
+): number {
+  const isMarketing = canal === CANAL_MARKETING || canalDeOrigem === CANAL_DE_ORIGEM_MARKETING;
+  const hasPag = (rdSource || "").toLowerCase().includes("pag");
+  if (isMarketing && hasPag) return 1;
+  const canalGroup = getCanalGroupFromId(String(canal ?? ""));
+  if (PARCEIRO_CANAL_GROUPS.has(canalGroup)) return 2;
+  return 3;
 }
 
-/** Map numeric canal ID (from szs_deals.canal) to squad id */
+/**
+ * Classifica usando canal_group + is_paid (vindo de szs_daily_counts pré-agregado).
+ * Marketing pago → 1, Marketing orgânico → 3, Indicações → 2, resto → 3.
+ *
+ * Quando isPaid não é passado (callers que só agregam por canal_group sem
+ * rd_source — ex: performance/ratios visuais), Marketing volta pro Squad 1
+ * por compatibilidade com o comportamento antigo. Para counts corretos,
+ * passe isPaid explicitamente.
+ */
+export function getSquadIdFromCanalGroup(canalGroup: string, isPaid?: boolean): number {
+  if (canalGroup === "Marketing") {
+    if (isPaid === undefined) return 1; // legacy default
+    return isPaid ? 1 : 3;
+  }
+  if (PARCEIRO_CANAL_GROUPS.has(canalGroup)) return 2;
+  return 3;
+}
+
+/** @deprecated Use getSquadIdFromDeal — esta versão ignora canal_de_origem e rd_source */
 export function getSquadIdFromCanalId(canalId: string | number): number {
   const canalGroup = getCanalGroupFromId(String(canalId));
-  return getSquadIdFromCanalGroup(canalGroup);
+  if (canalGroup === "Marketing") return 1; // mantém comportamento legado: Marketing → 1
+  if (PARCEIRO_CANAL_GROUPS.has(canalGroup)) return 2;
+  return 3;
 }
 
 /** Get squad name by id */
